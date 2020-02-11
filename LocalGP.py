@@ -30,6 +30,9 @@ class LocalGPModel:
         self.w_gen = w_gen
         self.covar_module = kernel
         self.likelihood = likelihoodFn
+        
+        #Number of training iterations used each time child model is updated
+        self.training_iter = 200
     '''
     Update the LocalGPModel with a pair {x,y}. x may be n-dimensional, y is scalar
     '''
@@ -65,7 +68,7 @@ class LocalGPModel:
     '''
     def createChild(self,x,y):
         #Create new child model, then train
-        newChildModel = LocalGPChild(x,y,self.likelihood,self.covar_module)
+        newChildModel = LocalGPChild(x,y,self)
         newChildModel.train()
         newChildModel.likelihood.train()
         #Add to the list of child models
@@ -85,19 +88,66 @@ class LocalGPModel:
     between the model's center and x.
     '''
     def getClosestChild(self,x):
-        centers = self.getCenters()
         #Compute distances between new input x and existing inputs
-        distances = self.covar_module(x.expand_as(centers),centers).evaluate()
-        minDist = torch.min(distances)
-        #Get the index of the child model whose center is closest to x
-        closestChildIndex = (distances==minDist).nonzero().sum()
-        return closestChildIndex,minDist
+        distances = self.getDistanceToCenters(x)
+        minDist,minIndex = torch.min(distances)
+        return minIndex,minDist
     
+    '''
+    Compute the distances from the point x to each center
+    '''
+    def getDistanceToCenters(self,x):
+        centers = self.getCenters()
+        distances = self.covar_module(x.expand_as(centers),centers).evaluate()
+        return distances
+    
+    '''
+    Make a prediction at the point x by finding the M closest child models and
+    computing a weighted average of their predictions. By default M is the number
+    of child models. If M < number of child models, use all of them.
+    '''
+    def predict(self,x,M=None):
+        if M is None:
+            M = len(self.children)
+        else:
+            M = min(M,len(self.children))
+        
+        #Compute distances between new input x and existing inputs
+        distances = self.getDistanceToCenters(x)
+        
+        #Get the M closest child models
+        sortResults = torch.sort(distances)
+        minDists,minIndices = sortResults[0][:M],sortResults[1][:M]
+        closestChildren = [self.children[i] for i in minIndices]
+        
+        '''
+        Get a posterior distribution for each child model. Note each will be
+        multivariate normal. Then compute weighted average of the means of the
+        posterior distributions.
+        '''
+        posteriorMeans = []
+        for child in closestChildren:
+            posterior = child.predict(x)
+            posteriorMeans.append(posterior.mean)
+        
+        '''
+        TODO: It would be better to instead compute the weighted average of the
+        posterior distributions so we have access to variance as well. Presumably
+        the resulting distribution is also multivariate normal.
+        '''
+        posteriorMeans = torch.stack(posteriorMeans)
+        weightedAverageMean = torch.sum(distances*posteriorMeans)/torch.sum(distances)
+        
+        return weightedAverageMean
+        
+        
 class LocalGPChild(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood, kernel):
-        super(LocalGPChild, self).__init__(train_x, train_y, likelihood())
+    def __init__(self, train_x, train_y, parent):
+        super(LocalGPChild, self).__init__(train_x, train_y, parent.likelihood())
+        
+        self.parent = parent
         self.mean_module = gpytorch.means.ConstantMean()
-        self.covar_module = kernel
+        self.covar_module = parent.covar_module
         
         '''
         Since the data is assumed to arrive as pairs {x,y}, we assume that the 
@@ -105,12 +155,16 @@ class LocalGPChild(gpytorch.models.ExactGP):
         center for the model.
         '''
         self.center = train_x
+        self.train_x = train_x
+        self.train_y = train_y
         
         #These properties are for computing the posterior variance bounds
         self.k = None
         self.kinv = None
         self.kinvInnerSums = None
-
+        
+        self.initTraining()
+        
     def forward(self,x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
@@ -123,8 +177,41 @@ class LocalGPChild(gpytorch.models.ExactGP):
         updatedModel = self.get_fantasy_model(inputs=x, targets=y)
         #Compute the center of the new model
         updatedModel.center = torch.mean(updatedModel.train_inputs)
+        
         return updatedModel
     
+    '''
+    Setup optimizer and perform initial training
+    '''
+    def initTraining(self):
+        #Switch to training mode
+        self.train()
+        self.likelihood.train()
+        
+        #Setup optimizer
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.1)
+        mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self)
+        
+        #Perform training iterations
+        for i in range(self.parent.training_iter):
+            self.optimizer.zero_grad()
+            output = self(self.train_x)
+            loss = -mll(output, self.train_y)
+            loss.backward()
+            self.optimizer.step()
+            
+        #Switch to evaluation/prediction mode
+        self.eval()
+        self.likelihood.eval()
+        
+    '''
+    Evaluate the child model to get the predictive posterior distribution
+    '''
+    def predict(self,x):
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():
+            prediction = self.likelihood(self(x))
+        return prediction
+        
     '''
     Compute the posterior variance bounds for an **isotropic** kernel
     

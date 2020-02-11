@@ -19,7 +19,11 @@ xv, yv = xv.float(),yv.float()
 z = torch.sin(xv**2+yv**2)
 plt.contourf(xv,yv,z)
 
-model.update(torch.tensor([xv[0,0],yv[0,0]]),z[0,0])
-model.update(torch.tensor([xv[1,1],yv[1,1]]),z[1,1])
+#Add a new data pair {x,y}
+model.update(torch.tensor([xv[0,0],yv[0,0]]),z[0,0].unsqueeze(0))
+#Predict at the data point just added
+prediction = model.predict(torch.tensor([xv[0,0],yv[0,0]]))
+#Update the existing child model
+model.update(torch.tensor([xv[1,1],yv[1,1]]),z[1,1].unsqueeze(0))
 
 ind,dist = model.getClosestChild(torch.tensor([xv[1,1],yv[1,1]]))
