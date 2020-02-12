@@ -9,6 +9,7 @@ import torch
 import gpytorch
 from varBoundFunctions import *
 import numpy as np
+import itertools
 
 '''
 Implements the Local Gaussian Process Regression Model as described by Nguyen-tuong et al.
@@ -37,9 +38,10 @@ class LocalGPModel:
     Update the LocalGPModel with a pair {x,y}. x may be n-dimensional, y is scalar
     '''
     def update(self,x,y):
-        #If no child model have been created yet, instantiate a new child with {x,y}
+        #If no child model have been created yet, instantiate a new child with {x,y} and record the output dimension
         if len(self.children)==0:
             self.createChild(x,y)
+            self.outputDim = int(y.shape[-1])
             
         #If child models exist, find the the child whose center is closest to x
         else:
@@ -84,14 +86,14 @@ class LocalGPModel:
         return torch.stack(centersList,dim=0)
     
     '''
-    Returns the closest child model to the point x, as well as the distance
+    Returns the index of the closest child model to the point x, as well as the distance
     between the model's center and x.
     '''
     def getClosestChild(self,x):
         #Compute distances between new input x and existing inputs
         distances = self.getDistanceToCenters(x)
-        minDist,minIndex = torch.min(distances)
-        return minIndex,minDist
+        minResults = torch.min(distances,1)
+        return minResults[1],minResults[0]
     
     '''
     Compute the distances from the point x to each center
@@ -100,17 +102,37 @@ class LocalGPModel:
         centers = self.getCenters()
         distances = self.covar_module(x.expand_as(centers),centers).evaluate()
         return distances
-    
+
+    '''
+    Make a prediction at the point(s) x. This method is a wrapper which handles the messy case of multidimensional inputs.
+    The actual prediction is done in the predictAtPoint helper method
+    '''
+    def predict(self,x,M=None):
+        #If x is a tensor with dimension d1 x d2 x ... x dk x n, iterate over the extra dims and predict at each point
+        #Create a 2D list which ranges over all values for each input dimension
+        dimRangeList = [list(range(dimSize)) for dimSize in x.shape[:-1]]
+        
+        #Take a cross product to get all possible coordinates in the inputs
+        inputDimIterator = itertools.product(*dimRangeList)
+        
+        #Initialize tensor of zeros to store predictions
+        predictions = torch.zeros(size=(*x.shape[:-1],self.outputDim))
+        
+        for inputIndices in inputDimIterator:
+            predictions[inputIndices] = self.predictAtPoint(x[inputIndices].unsqueeze(0),M)
+        
+        return predictions
     '''
     Make a prediction at the point x by finding the M closest child models and
     computing a weighted average of their predictions. By default M is the number
     of child models. If M < number of child models, use all of them.
     '''
-    def predict(self,x,M=None):
+    def predictAtPoint(self,x,M=None):
         if M is None:
             M = len(self.children)
         else:
             M = min(M,len(self.children))
+        
         
         #Compute distances between new input x and existing inputs
         distances = self.getDistanceToCenters(x)
@@ -199,15 +221,14 @@ class LocalGPChild(gpytorch.models.ExactGP):
             loss = -mll(output, self.train_y)
             loss.backward()
             self.optimizer.step()
-            
-        #Switch to evaluation/prediction mode
-        self.eval()
-        self.likelihood.eval()
         
     '''
     Evaluate the child model to get the predictive posterior distribution
     '''
     def predict(self,x):
+        #Switch to eval/prediction mode
+        self.eval()
+        self.likelihood.eval()
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             prediction = self.likelihood(self(x))
         return prediction
