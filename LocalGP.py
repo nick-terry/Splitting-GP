@@ -34,6 +34,9 @@ class LocalGPModel:
         
         #Number of training iterations used each time child model is updated
         self.training_iter = 200
+        
+        #Default output dimension is 1 (scalar)
+        self.outputDim = 1
     '''
     Update the LocalGPModel with a pair {x,y}. x may be n-dimensional, y is scalar
     '''
@@ -48,7 +51,7 @@ class LocalGPModel:
             closestChildIndex,minDist = self.getClosestChild(x)
             
             #Check if the closest child is farther away than child model generation threshold
-            if minDist < self.w_gen:
+            if float(minDist) < self.w_gen:
                 
                 closestChildModel = self.children[closestChildIndex]
                 #Create a new model which additionally incorporates the pair {x,y}
@@ -198,7 +201,7 @@ class LocalGPChild(gpytorch.models.ExactGP):
     def update(self,x,y):
         updatedModel = self.get_fantasy_model(inputs=x, targets=y)
         #Compute the center of the new model
-        updatedModel.center = torch.mean(updatedModel.train_inputs)
+        updatedModel.center = torch.mean(torch.stack(updatedModel.train_inputs,dim=0),dim=1)
         
         return updatedModel
     
