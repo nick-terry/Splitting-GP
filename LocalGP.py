@@ -140,9 +140,9 @@ class LocalGPModel:
         #Compute distances between new input x and existing inputs
         distances = self.getDistanceToCenters(x)
         
-        #Get the M closest child models
-        sortResults = torch.sort(distances)
-        minDists,minIndices = sortResults[0][:M],sortResults[1][:M]
+        #Get the M closest child models. Need to squeeze out extra dims of 1.
+        sortResults = torch.sort(distances.squeeze(-1).squeeze(-1),descending=True)
+        minDists,minIndices = sortResults[0][:M].squeeze(-1),sortResults[1][:M]
         closestChildren = [self.children[i] for i in minIndices]
         
         '''
@@ -161,10 +161,9 @@ class LocalGPModel:
         the resulting distribution is also multivariate normal.
         '''
         posteriorMeans = torch.stack(posteriorMeans)
-        weightedAverageMean = torch.sum(distances*posteriorMeans)/torch.sum(distances)
+        weightedAverageMean = torch.sum(minDists*posteriorMeans)/torch.sum(minDists)
         
         return weightedAverageMean
-        
         
 class LocalGPChild(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, parent):
