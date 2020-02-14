@@ -10,6 +10,7 @@ import gpytorch
 from varBoundFunctions import *
 import numpy as np
 import itertools
+import copy
 
 '''
 Implements the Local Gaussian Process Regression Model as described by Nguyen-tuong et al.
@@ -25,12 +26,13 @@ More docstring here
 
 '''
 class LocalGPModel:
-    def __init__(self, likelihoodFn, kernel, w_gen):        
+    def __init__(self, likelihoodFn, kernel, w_gen, inheritKernel=True):        
         #Initialize a list to contain local child models
         self.children = []
         self.w_gen = w_gen
         self.covar_module = kernel
         self.likelihood = likelihoodFn
+        self.inheritKernel = inheritKernel
         
         #Number of training iterations used each time child model is updated
         self.training_iter = 200
@@ -51,7 +53,7 @@ class LocalGPModel:
             closestChildIndex,minDist = self.getClosestChild(x)
             
             #Check if the closest child is farther away than child model generation threshold
-            if float(minDist) < self.w_gen:
+            if float(minDist) > self.w_gen:
                 
                 closestChildModel = self.children[closestChildIndex]
                 #Create a new model which additionally incorporates the pair {x,y}
@@ -73,9 +75,8 @@ class LocalGPModel:
     '''
     def createChild(self,x,y):
         #Create new child model, then train
-        newChildModel = LocalGPChild(x,y,self)
-        newChildModel.train()
-        newChildModel.likelihood.train()
+        newChildModel = LocalGPChild(x,y,self,self.inheritKernel)
+    
         #Add to the list of child models
         self.children.append(newChildModel)
         
@@ -84,7 +85,7 @@ class LocalGPModel:
     '''
     def getCenters(self):
         #Get the center of each child model
-        centersList = list(map(lambda x:x.center,self.children))
+        centersList = list(map(lambda x:x.center.reshape((2)),self.children))
         #Return the centers after stacking in new dimension
         return torch.stack(centersList,dim=0)
     
@@ -95,7 +96,8 @@ class LocalGPModel:
     def getClosestChild(self,x):
         #Compute distances between new input x and existing inputs
         distances = self.getDistanceToCenters(x)
-        minResults = torch.min(distances,1)
+        #Get the single minimum distance from the tensor
+        minResults = torch.max(distances,0)
         return minResults[1],minResults[0]
     
     '''
@@ -103,8 +105,8 @@ class LocalGPModel:
     '''
     def getDistanceToCenters(self,x):
         centers = self.getCenters()
-        distances = self.covar_module(x.expand_as(centers),centers).evaluate()
-        return distances
+        distances = self.covar_module(x,centers).evaluate()
+        return distances.squeeze(0)
 
     '''
     Make a prediction at the point(s) x. This method is a wrapper which handles the messy case of multidimensional inputs.
@@ -161,18 +163,27 @@ class LocalGPModel:
         the resulting distribution is also multivariate normal.
         '''
         posteriorMeans = torch.stack(posteriorMeans)
-        weightedAverageMean = torch.sum(minDists*posteriorMeans)/torch.sum(minDists)
+        #This computation is incorrect
+        weightedAverageMean = torch.dot(minDists,posteriorMeans.squeeze(-1))/torch.sum(minDists)
         
         return weightedAverageMean
         
 class LocalGPChild(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, parent):
+    def __init__(self, train_x, train_y, parent, inheritKernel=True):
         super(LocalGPChild, self).__init__(train_x, train_y, parent.likelihood())
         
         self.parent = parent
         self.mean_module = gpytorch.means.ConstantMean()
-        self.covar_module = parent.covar_module
         
+        '''
+        If inheritKernel is set to True, then the same Kernel function (including the same hyperparameters)
+        will be used in all of the child models. Otherwise, a separate instance of the same kernel function
+        is used for each child model.
+        '''
+        if inheritKernel:
+            self.covar_module = parent.covar_module
+        else:
+            self.covar_module = copy.deepcopy(parent.covar_module)
         '''
         Since the data is assumed to arrive as pairs {x,y}, we assume that the 
         initial train_x,train_y are singleton, and set train_x as the intial
@@ -200,8 +211,10 @@ class LocalGPChild(gpytorch.models.ExactGP):
     def update(self,x,y):
         updatedModel = self.get_fantasy_model(inputs=x, targets=y)
         #Compute the center of the new model
-        updatedModel.center = torch.mean(torch.stack(updatedModel.train_inputs,dim=0),dim=1)
+        updatedModel.center = torch.mean(updatedModel.train_inputs[0],dim=0)
         
+        #Need to perform a prediction so that get_fantasy_model may be used to update later
+        updatedModel.predict(x)
         return updatedModel
     
     '''
@@ -224,6 +237,8 @@ class LocalGPChild(gpytorch.models.ExactGP):
             loss.backward()
             self.optimizer.step()
         
+        #Need to perform a prediction so that get_fantasy_model may be used to update later
+        self.predict(self.train_x)
     '''
     Evaluate the child model to get the predictive posterior distribution
     '''
