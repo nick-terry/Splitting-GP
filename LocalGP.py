@@ -144,7 +144,8 @@ class LocalGPModel:
         
         #Get the M closest child models. Need to squeeze out extra dims of 1.
         sortResults = torch.sort(distances.squeeze(-1).squeeze(-1),descending=True)
-        minDists,minIndices = sortResults[0][:M].squeeze(-1),sortResults[1][:M]
+        minDists = sortResults[0][:M].squeeze(-1) if sortResults[0].dim()>0 else sortResults[0].unsqueeze(0)
+        minIndices = sortResults[1][:M] if sortResults[1].dim()>0 else sortResults[1].unsqueeze(0)
         closestChildren = [self.children[i] for i in minIndices]
         
         '''
