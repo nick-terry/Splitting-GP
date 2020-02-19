@@ -26,7 +26,7 @@ More docstring here
 
 '''
 class LocalGPModel:
-    def __init__(self, likelihoodFn, kernel, w_gen, inheritKernel=True):        
+    def __init__(self, likelihoodFn, kernel, w_gen, inheritKernel=True, **kwargs):        
         #Initialize a list to contain local child models
         self.children = []
         self.w_gen = w_gen
@@ -38,7 +38,17 @@ class LocalGPModel:
         self.training_iter = 200
         
         #Default output dimension is 1 (scalar)
-        self.outputDim = 1
+        self.outputDim = 1 if 'outputDim' not in kwargs else kwargs['outputDim']
+        
+        #If numInducingInputs is given, use variational GP models for child models
+        if 'numInducingPoints' in kwargs:
+            self.numInducingPoints = kwargs['numInducingPoints']
+            assert(type(self.numInducingPoints)==int)
+            assert(self.numInducingPoints>0)
+            self.objectiveFunctionClass = gpytorch.mlls.VariationalELBO
+        else:
+            self.numInducingPoints = None
+            
     '''
     Update the LocalGPModel with a pair {x,y}. x may be n-dimensional, y is scalar
     '''
@@ -75,8 +85,10 @@ class LocalGPModel:
     '''
     def createChild(self,x,y):
         #Create new child model, then train
-        newChildModel = LocalGPChild(x,y,self,self.inheritKernel)
-    
+        if self.numInducingPoints is None:
+            newChildModel = LocalGPChild(x,y,self,self.inheritKernel)
+        else:
+            newChildModel = ApproximateGPChild(x,y,self,self.inheritKernel)
         #Add to the list of child models
         self.children.append(newChildModel)
         
@@ -269,6 +281,189 @@ class LocalGPChild(gpytorch.models.ExactGP):
             self.k = self.covar_module(train_x,train_x).evaluate()
         
         if kwargs['method'] is None:
+            kwargs['method'] == 'direct'
+        
+        #Compute raw bounds for posterior variance directly by inverting the kernel matrix
+        if kwargs['method'] == 'direct':
+            if self.kinv is None:
+                self.kinv = torch.inverse(self.k)
+                
+            #Compute the inner summations needed for the posterior variance bounds.
+            #Result will be a jx1 tensor where result[j] is the sum of elements in 
+            #jth column of kinv
+            def innerSums():
+                return torch.sum(self.kinv,dim=0)
+             
+            if self.kinvInnerSums is None:
+                self.kinvInnerSums = innerSums()
+            
+            #Define (n-1)x1 tensor of values at which to evaluate the kernel
+            
+            boundVals = torch.tensor([((n-j+1)*tau)**2 for j in range(1,n)]).view([n-1,1])
+            
+            #Compute kernel evaluated for |x-x_n|, then add to kernel evaluated at boundVals and multiply by corresponding column sum from kinv
+            #k_x_xn = self.covar_module(x.view([1,1]),train_x[-1].view([1,1]))**2
+            k_x_xn = self.covar_module(x.view([1,1]),train_x[-1].view([1,1])).evaluate()**2
+            outerSumTerms = self.covar_module(boundVals,torch.zeros(n-1).view([n-1,1]),diag=True)**2*self.kinvInnerSums[:-1]
+            #Compute kernel evaluated at d=0, then return bounds
+            zero_tensor = torch.zeros([1,1])
+            k_0 = self.covar_module(zero_tensor,zero_tensor).evaluate()
+            return k_0 - torch.sum(outerSumTerms) - k_x_xn * self.kinvInnerSums[-1]
+        
+        if kwargs['method'] is 'eigen':
+            #Compute kernel evaluated at d=0
+            zero_tensor = torch.zeros([1,1])
+            k_0 = self.covar_module(zero_tensor,zero_tensor).evaluate()
+            
+            #Find eigenvalues of k. We can safely take the real part since
+            #k is positive definite and therefore has only positive real eigenvalues.
+            eigVals = np.real(np.linalg.eigvals(self.k.detach()))
+            
+            #Return bound
+            return float(k_0 - (torch.norm(self.covar_module(x+torch.zeros(n),train_x,diag=True))**2)/np.max(eigVals))
+        
+'''
+A child model which computes an approximate posterior distribution using inducing points.
+'''
+class ApproximateGPChild(gpytorch.models.VariationalGP):
+    def __init__(self, train_x, train_y, parent, inheritKernel=True):
+        #Set the number of inducing inputs to be no more than the number of points observed
+        numInducingPoints = min(parent.numInducingPoints,train_x.shape[0])
+        #Define the multivariate normal variational distribution for approximate posterior computation
+        variationalDist = gpytorch.variational.CholeskyVariationalDistribution(numInducingPoints)
+        variationalStrat = gpytorch.variational.VariationalStrategy(self,train_x,variationalDist,learn_inducing_locations=True)
+        
+        super(ApproximateGPChild, self).__init__(variationalStrat)
+        
+        self.parent = parent
+        self.mean_module = gpytorch.means.ConstantMean()
+        self.variationalDist = variationalDist
+        self.variationalStrat = variationalStrat
+        self.numInducingPoints = numInducingPoints
+        
+        self.likelihood = parent.likelihood()
+        '''
+        If inheritKernel is set to True, then the same Kernel function (including the same hyperparameters)
+        will be used in all of the child models. Otherwise, a separate instance of the same kernel function
+        is used for each child model.
+        '''
+        if inheritKernel:
+            self.covar_module = parent.covar_module
+        else:
+            self.covar_module = copy.deepcopy(parent.covar_module)
+        '''
+        Since the data is assumed to arrive as pairs {x,y}, we assume that the 
+        initial train_x,train_y are singleton, and set train_x as the intial
+        center for the model.
+        '''
+        self.center = train_x
+        self.train_x = train_x
+        self.train_y = train_y
+        
+        #These properties are for computing the posterior variance bounds
+        self.k = None
+        self.kinv = None
+        self.kinvInnerSums = None
+        
+        self.initTraining()
+        
+    def forward(self,x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+    
+    '''
+    Update the child model to incorporate the training pair {x,y}
+    '''
+    def update(self,x,y):
+        #Concatenate existing data with new data
+        self.train_x = torch.cat([self.train_x,x],dim=0)
+        self.train_y = torch.cat([self.train_y,y],dim=0)
+        
+        #Compute the center of the model
+        self.center = torch.mean(self.train_x,dim=0)
+        
+        #Set the number of inducing inputs to be no more than the number of points observed
+        self.numInducingPoints = min(self.parent.numInducingPoints,self.train_x.shape[0])
+        
+        #Create new variational strategy for the updated model
+        self.variationalStrat = gpytorch.variational.VariationalStrategy(
+                model=self,
+                inducing_points=self.train_x,
+                variational_distribution=self.variationalDist,
+                learn_inducing_locations=True)
+        
+        #Retrain to fit new data
+        self.retrain()
+        return self
+    
+    '''
+    Setup optimizer and perform initial training
+    '''
+    def initTraining(self):
+        #Switch to training mode
+        self.train()
+        self.likelihood.train()
+        
+        #Setup optimizer
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.1)
+        objectiveFunction = self.parent.objectiveFunctionClass(self.likelihood,self,self.train_x.shape[0])
+        
+        #Perform training iterations
+        for i in range(self.parent.training_iter):
+            self.optimizer.zero_grad()
+            output = self(self.train_x)
+            loss = -objectiveFunction(output, self.train_y)
+            loss.backward()
+            self.optimizer.step()
+    
+    '''
+    Retrain model after new data is obtained
+    '''
+    def retrain(self):
+        #Switch to training mode
+        self.train()
+        self.likelihood.train()
+        
+        objectiveFunction = self.parent.objectiveFunctionClass(self.likelihood,self,self.train_x.shape[0])
+        
+        #Perform training iterations
+        for i in range(self.parent.training_iter//2):
+            self.optimizer.zero_grad()
+            output = self(self.train_x)
+            loss = -objectiveFunction(output, self.train_y)
+            loss.backward()
+            self.optimizer.step()
+    
+    '''
+    Evaluate the child model to get the predictive posterior distribution
+    '''
+    def predict(self,x):
+        #Switch to eval/prediction mode
+        self.eval()
+        self.likelihood.eval()
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():
+            prediction = self.likelihood(self(x))
+        return prediction
+        
+    '''
+    Compute the posterior variance bounds for an **isotropic** kernel
+    
+    "direct" method computes posterior variance bounds directly using the 
+    inverse kernel matrix and the assumption that distance between consecutive
+    training data is at most tau apart
+    
+    "eigen" method computes the bounds using the maximal eigenvalue of the kernel matrix
+    '''
+    def postVarBound(self,x,train_x,**kwargs):
+        #If the kernel matrix is not yet computed, compute it
+        n = train_x.shape[0]
+        if self.k is None:
+            #Result should be square nxn tensor
+            train_x = train_x.view([n,1])
+            self.k = self.covar_module(train_x,train_x).evaluate()
+        
+        if kwargs['method'] is None:
             kwargs['method'] = 'direct'
         
         #Compute raw bounds for posterior variance directly by inverting the kernel matrix
@@ -309,4 +504,5 @@ class LocalGPChild(gpytorch.models.ExactGP):
             
             #Return bound
             return float(k_0 - (torch.norm(self.covar_module(x+torch.zeros(n),train_x,diag=True))**2)/np.max(eigVals))
+    
     

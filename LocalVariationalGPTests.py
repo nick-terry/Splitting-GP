@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
 """
+Created on Tue Feb 18 17:01:27 2020
+
+@author: pnter
+"""
+
+# -*- coding: utf-8 -*-
+"""
 Created on Sun Feb  9 18:05:26 2020
 
 @author: pnter
@@ -15,7 +22,7 @@ import numpy as np
 #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
 kernel = gpytorch.kernels.RBFKernel(ard_num_dims=2)
 likelihood = gpytorch.likelihoods.GaussianLikelihood
-model = LocalGP.LocalGPModel(likelihood,kernel,w_gen=.3,inheritKernel=False)
+model = LocalGP.LocalGPModel(likelihood,kernel,w_gen=.3,inheritKernel=False,numInducingPoints=5)
 
 #Construct a grid of input points
 gridDims = 25
@@ -27,15 +34,17 @@ z = 5*torch.sin(xyGrid[:,:,0]**2+(2*xyGrid[:,:,1])**2).reshape((gridDims,gridDim
 
 #Sample some random points, then fit a LocalGP model to the points
 torch.manual_seed(42069)
-numSamples = 500
+numSamples = 10
 randIndices = torch.multinomial(torch.ones((2,gridDims)).float(),numSamples,replacement=True)
 
+j = 0
 for randPairIndex in range(numSamples):
+    print(j)
     randPair = randIndices[:,randPairIndex]
     x_train = xyGrid[randPair[0],randPair[1]].unsqueeze(0)
     y_train = z[randPair[0],randPair[1]]
     model.update(x_train,y_train)
-    
+    j+=1
 print('Done training')
 
 #Predict over the whole grid for plotting
@@ -56,5 +65,3 @@ sampledPoints  = xyGrid[randIndices[0,:],randIndices[1,:]]
 axes[1].scatter(sampledPoints[:,0].detach(),sampledPoints[:,1].detach(),c='orange',s=8,edgecolors='black')
 childrenCenters = model.getCenters().squeeze(1)
 axes[1].scatter(childrenCenters[:,0].detach(),childrenCenters[:,1].detach(),c='orange',s=24,edgecolors='white')
-
-#Test an approximate variational GP
