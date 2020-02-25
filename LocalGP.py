@@ -48,7 +48,12 @@ class LocalGPModel:
             self.objectiveFunctionClass = gpytorch.mlls.VariationalELBO
         else:
             self.numInducingPoints = None
-            
+        
+        #If M=# of closest models for prediction is given, set parameter
+        if 'M' in kwargs:
+            self.M = kwargs['M']
+        else:
+            self.M = None
     '''
     Update the LocalGPModel with a pair {x,y}. x may be n-dimensional, y is scalar
     '''
@@ -119,7 +124,14 @@ class LocalGPModel:
         centers = self.getCenters()
         distances = self.covar_module(x,centers).evaluate()
         return distances.squeeze(0)
-
+    
+    '''
+    Make a prediction at the point(s) x. This method is a wrapper which handles the messy case of multidimensional inputs.
+    The actual prediction is done in the predictAtPoint helper method. If no M is given, use default
+    '''
+    def predict(self,x):
+        return self.predict(x,self.M)
+    
     '''
     Make a prediction at the point(s) x. This method is a wrapper which handles the messy case of multidimensional inputs.
     The actual prediction is done in the predictAtPoint helper method
@@ -428,7 +440,7 @@ class ApproximateGPChild(gpytorch.models.VariationalGP):
         objectiveFunction = self.parent.objectiveFunctionClass(self.likelihood,self,self.train_x.shape[0])
         
         #Perform training iterations
-        for i in range(self.parent.training_iter//2):
+        for i in range(self.parent.training_iter):
             self.optimizer.zero_grad()
             output = self(self.train_x)
             loss = -objectiveFunction(output, self.train_y)
