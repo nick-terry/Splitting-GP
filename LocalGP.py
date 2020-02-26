@@ -7,6 +7,9 @@ Created on Fri Feb  7 10:57:53 2020
 
 import torch
 import gpytorch
+
+from gpytorch.utils.broadcasting import _mul_broadcast_shape
+
 from varBoundFunctions import *
 import numpy as np
 import itertools
@@ -204,7 +207,7 @@ class LocalGPModel:
         
 class LocalGPChild(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, parent, inheritKernel=True):
-        super(LocalGPChild, self).__init__(train_x, train_y, parent.likelihood())
+        super(LocalGPChild, self).__init__(train_x, train_y, parent.likelihood(MIN_INFERRED_NOISE_LEVEL = 1e-3))
         
         self.parent = parent
         self.mean_module = gpytorch.means.ConstantMean()
@@ -283,7 +286,7 @@ class LocalGPChild(gpytorch.models.ExactGP):
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             prediction = self.likelihood(self(x))
         return prediction
-        
+    
     '''
     Compute the posterior variance bounds for an **isotropic** kernel
     

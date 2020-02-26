@@ -4,57 +4,70 @@ Created on Sun Feb  9 18:05:26 2020
 
 @author: pnter
 s"""
-
+import time
 import LocalGP
 import torch
 import gpytorch
 import matplotlib.pyplot as plt
 from matplotlib.animation import ArtistAnimation
 import numpy as np
-
+from itertools import product
 
 #Construct a grid of input points
 gridDims = 50
 x,y = torch.meshgrid([torch.linspace(-5,5,gridDims), torch.linspace(-5,5,gridDims)])
 xyGrid = torch.stack([x,y],dim=2).float()
 
-#Evaluate a function to approximate
-z = (5*torch.sin(xyGrid[:,:,0]**2+(2*xyGrid[:,:,1])**2)).reshape((gridDims,gridDims,1))
-
-#Sample some random points, then fit a LocalGP model to the points
-torch.manual_seed(42069)
-numSamples = 200
-randIndices = torch.multinomial(torch.ones((2,gridDims)).float(),numSamples,replacement=True)
+def evalModel(w_gen,numSamples,maxChildren0):
+    #Set RNG seed
+    torch.manual_seed(42069)
     
-#Set # of models for cross-validation
-k = 5
-kernel = gpytorch.kernels.RBFKernel
-likelihood = gpytorch.likelihoods.GaussianLikelihood
-w_gen = .5
-
-def makeModel(kernelClass,likelihood,w_gen):
-    #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
-    model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=2),w_gen=w_gen,inheritKernel=True,
-                                 maxChildren=5)
-    return model
+    #Evaluate a function to approximate, with added noise
+    z = (torch.sin(xyGrid[:,:,0]**2+(2*xyGrid[:,:,1])**2)).reshape((gridDims,gridDims,1))
+    z += torch.randn(z.shape) * .05
     
-def makeModels(kernelClass,likelihood,w_gen,k):
-    models = []
-    for i in range(k):
-        models.append(makeModel(kernelClass, likelihood, w_gen))
-    return models
+    #Sample some random points, then fit a LocalGP model to the points
+    #numSamples = 100
+    randIndices = torch.multinomial(torch.ones((2,gridDims)).float(),numSamples,replacement=True)
+        
+    #Set # of models for cross-validation
+    k = 5
+    kernel = gpytorch.kernels.RBFKernel
+    likelihood = gpytorch.likelihoods.GaussianLikelihood
+    w_gen = .5
+    
+    def makeModel(kernelClass,likelihood,w_gen):
+        #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
+        model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=2),w_gen=w_gen,inheritKernel=True,
+                                     maxChildren=maxChildren0)
+        return model
+        
+    def makeModels(kernelClass,likelihood,w_gen,k):
+        models = []
+        for i in range(k):
+            models.append(makeModel(kernelClass, likelihood, w_gen))
+        return models
+    
+    
+    model = makeModel(kernel,likelihood,w_gen=w_gen)
+    t0 = time.time()
+    j = 0
+    for randPairIndex in range(numSamples):
+        randPair = randIndices[:,randPairIndex]
+        x_train = xyGrid[randPair[0],randPair[1]].unsqueeze(0)
+        y_train = z[randPair[0],randPair[1]]
+        model.update(x_train,y_train)
+        print(j)
+        j += 1
+    t1 = time.time()
+    print('Done training')
+    return t1-t0
 
-model = makeModel(kernel,likelihood,w_gen=w_gen)
-j = 0
-for randPairIndex in range(numSamples):
-    randPair = randIndices[:,randPairIndex]
-    x_train = xyGrid[randPair[0],randPair[1]].unsqueeze(0)
-    y_train = z[randPair[0],randPair[1]]
-    model.update(x_train,y_train)
-    print(j)
-    j += 1
-
-print('Done training')    
+maxChildrenVals = [3,4]
+numSamplesVals = [100,200,300,400,500,600,700,800,900, 1000,1200,1300,2000]
+runtimes = {}
+for maxChildren,numSamples in product(maxChildrenVals,numSamplesVals):
+    runtimes[(maxChildren,numSamples)] = evalModel(.5,numSamples,maxChildren)
 
 '''
 #Predict over the whole grid for plotting
