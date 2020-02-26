@@ -14,16 +14,16 @@ import numpy as np
 
 
 #Construct a grid of input points
-gridDims = 1000
+gridDims = 250
 x,y = torch.meshgrid([torch.linspace(-5,5,gridDims), torch.linspace(-5,5,gridDims)])
 xyGrid = torch.stack([x,y],dim=2).float()
 
 #Evaluate a function to approximate
-z = (5*torch.sin(xyGrid[:,:,0]**2+(2*xyGrid[:,:,1])**2)+3*xyGrid[:,:,0]).reshape((gridDims,gridDims,1))
+z = (5*torch.sin(xyGrid[:,:,0]**2+(2*xyGrid[:,:,1])**2)).reshape((gridDims,gridDims,1))
 
 #Sample some random points, then fit a LocalGP model to the points
 torch.manual_seed(42069)
-numSamples = 500
+numSamples = 1000
 randIndices = torch.multinomial(torch.ones((2,gridDims)).float(),numSamples,replacement=True)
     
 #Set # of models for cross-validation
@@ -43,22 +43,25 @@ def makeModels(kernelClass,likelihood,w_gen,k):
         models.append(makeModel(kernelClass, likelihood, w_gen))
     return models
 
-model = makeModel(kernel,likelihood,w_gen=0)
+model = makeModel(kernel,likelihood,w_gen=w_gen)
+j = 0
 for randPairIndex in range(numSamples):
     randPair = randIndices[:,randPairIndex]
     x_train = xyGrid[randPair[0],randPair[1]].unsqueeze(0)
     y_train = z[randPair[0],randPair[1]]
     model.update(x_train,y_train)
+    print(j)
+    j += 1
 
 print('Done training')    
 
-
+'''
 #Predict over the whole grid for plotting
 prediction = model.predict(xyGrid)
 
 #Define a common scale for color mapping for contour plots
 maxAbsVal = torch.max(torch.abs(z))
-levels = np.linspace(-z,z,30)
+levels = np.linspace(-maxAbsVal,maxAbsVal,30)
 
 #Plot true function
 fig,axes = plt.subplots(nrows=1,ncols=2,sharex=True,sharey=True,figsize=(12,5))
@@ -68,8 +71,8 @@ contours = axes[0].contourf(xyGrid[:,:,0].detach(),xyGrid[:,:,1].detach(),z.deta
 #Plot GP regression approximation
 axes[1].contourf(xyGrid[:,:,0].detach(),xyGrid[:,:,1].detach(),prediction.detach().squeeze(2),levels)
 #Show the points which were sampled to construct the GP model
-sampledPoints  = xyGrid[randIndices[0,:],randIndices[1,:j]]
+sampledPoints  = xyGrid[randIndices[0,:],randIndices[1,:]]
 axes[1].scatter(sampledPoints[:,0].detach(),sampledPoints[:,1].detach(),c='orange',s=8,edgecolors='black')
 childrenCenters = model.getCenters().squeeze(1)
 axes[1].scatter(childrenCenters[:,0].detach(),childrenCenters[:,1].detach(),c='orange',s=24,edgecolors='white')
-
+'''
