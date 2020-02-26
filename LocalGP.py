@@ -11,6 +11,7 @@ from varBoundFunctions import *
 import numpy as np
 import itertools
 import copy
+from math import inf
 
 '''
 Implements the Local Gaussian Process Regression Model as described by Nguyen-tuong et al.
@@ -49,6 +50,12 @@ class LocalGPModel:
         else:
             self.numInducingPoints = None
         
+        #If maxChildren in kwargs, set self.maxChildren. Else, set to inf
+        if 'maxChildren' in kwargs:
+            self.maxChildren = kwargs['maxChildren']
+        else:
+            self.maxChildren = inf
+        
         #If M=# of closest models for prediction is given, set parameter
         if 'M' in kwargs:
             self.M = kwargs['M']
@@ -67,14 +74,16 @@ class LocalGPModel:
         else:
             closestChildIndex,minDist = self.getClosestChild(x)
             
-            #Check if the closest child is farther away than child model generation threshold
-            if float(minDist) > self.w_gen:
+            #Check if the closest child is farther away than child model generation threshold,
+            #or if the max number of children has already been generated
+            if float(minDist) > self.w_gen or len(self.children) >= self.maxChildren:
                 
                 closestChildModel = self.children[closestChildIndex]
                 #Create a new model which additionally incorporates the pair {x,y}
                 newChildModel = closestChildModel.update(x,y)
                 #Replace the existing model with the new model which incorporates new data
                 self.children[closestChildIndex] = newChildModel
+                del closestChildModel
                 
             else:
                 #Since the distance from x to the nearest child model is greater than w_gen, create a new child model centered at x

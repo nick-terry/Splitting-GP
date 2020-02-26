@@ -13,7 +13,8 @@ import numpy as np
 
 def makeModel(kernelClass,likelihood,w_gen):
     #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
-    model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=2),w_gen=w_gen,inheritKernel=False)
+    model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=2),w_gen=w_gen,inheritKernel=False,
+                                 maxChildren=5)
     return model
     
 def makeModels(kernelClass,likelihood,w_gen,k):
@@ -67,14 +68,13 @@ z = (5*torch.sin(xyGrid[:,:,0]**2+(2*xyGrid[:,:,1])**2)+3*xyGrid[:,:,0]).reshape
 
 #Sample some random points, then fit a LocalGP model to the points
 torch.manual_seed(6942069)
-numSamples = 1000
+numSamples = 200
 randIndices = torch.multinomial(torch.ones((2,gridDims)).float(),numSamples,replacement=True)
 
 #Set # of models for cross-validation
 k = 5
 kernel = gpytorch.kernels.RBFKernel
 likelihood = gpytorch.likelihoods.GaussianLikelihood
-w_gen = 0
 
 #Create different values of w_gen to test
 w_genValues = torch.linspace(0,.6,8)

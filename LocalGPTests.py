@@ -14,7 +14,7 @@ import numpy as np
 
 
 #Construct a grid of input points
-gridDims = 250
+gridDims = 50
 x,y = torch.meshgrid([torch.linspace(-5,5,gridDims), torch.linspace(-5,5,gridDims)])
 xyGrid = torch.stack([x,y],dim=2).float()
 
@@ -23,18 +23,19 @@ z = (5*torch.sin(xyGrid[:,:,0]**2+(2*xyGrid[:,:,1])**2)).reshape((gridDims,gridD
 
 #Sample some random points, then fit a LocalGP model to the points
 torch.manual_seed(42069)
-numSamples = 1000
+numSamples = 200
 randIndices = torch.multinomial(torch.ones((2,gridDims)).float(),numSamples,replacement=True)
     
 #Set # of models for cross-validation
 k = 5
 kernel = gpytorch.kernels.RBFKernel
 likelihood = gpytorch.likelihoods.GaussianLikelihood
-w_gen = 0
+w_gen = .5
 
 def makeModel(kernelClass,likelihood,w_gen):
     #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
-    model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=2),w_gen=w_gen,inheritKernel=True)
+    model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=2),w_gen=w_gen,inheritKernel=True,
+                                 maxChildren=5)
     return model
     
 def makeModels(kernelClass,likelihood,w_gen,k):
