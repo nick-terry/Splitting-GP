@@ -30,10 +30,10 @@ More docstring here
 
 '''
 class LocalGPModel:
-    def __init__(self, likelihoodFn, kernel, w_gen, inheritKernel=True, **kwargs):        
+    def __init__(self, likelihoodFn, kernel, inheritKernel=True, **kwargs):        
         #Initialize a list to contain local child models
         self.children = []
-        self.w_gen = w_gen
+        self.w_gen = kwargs['w_gen'] if 'w_gen' in kwargs else .5
         self.covar_module = kernel
         self.likelihood = likelihoodFn
         self.inheritKernel = inheritKernel

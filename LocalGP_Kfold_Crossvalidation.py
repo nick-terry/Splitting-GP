@@ -18,7 +18,7 @@ import MemoryHelper
 
 def makeModel(kernelClass,likelihood,w_gen):
     #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
-    model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=2),w_gen=w_gen,inheritKernel=False)
+    model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel=False,w_gen=w_gen)
     return model
 
 def makeSplittingModel(kernelClass,likelihood,splittingLimit):
@@ -38,7 +38,7 @@ def makeSplittingLocalGPModels(kernelClass,likelihood,splittingLimit,k):
         models.append(makeSplittingModel(kernelClass, likelihood, splittingLimit))
     return models
 
-def kFoldCrossValidation(kernelClass,likelihood,modelsList,numSamples):
+def kFoldCrossValidation(kernelClass,likelihood,modelsList,numSamples,completeRandIndices,xyGrid,z):
     # of folds is equal to # of models given
     models = copy.deepcopy(modelsList)
     k = len(models)
@@ -97,7 +97,7 @@ def resultsToDF(results,modelType,replicate,params):
     df['avg_memory_usage'] = df['memory_usage'].apply(np.mean)
     df['model'] = modelType
     paramName = 'splittingLimit' if modelType == 'splitting' else 'w_gen'
-    df['params'] = '{0}={1}'.format((paramName, params[paramName]))
+    df['params'] = '{0}={1}'.format(paramName, .5 if modelType=='exact' else params[paramName])
     df['replicate'] = replicate
     
     return df
@@ -158,7 +158,7 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     torch.manual_seed(6942069)
     seeds = torch.floor(100000*torch.rand(size=(replications,1)))
     
-    experimentDF = pd.DataFrame()
+    experimentDF = None
     
     #Create a function to get new models for each step of the experiment
     if modelType=='exact':
@@ -183,9 +183,16 @@ def runCrossvalidationExperiment(modelType,**kwargs):
         results = {}
         for i in range(numSamplesTensor.shape[-1]):
             print('numSamples={0}'.format(100*(i+1)))
-            results[int(numSamplesTensor[i])] = kFoldCrossValidation(kernel,likelihood,modelsList,int(numSamplesTensor[i]))
+            results[int(numSamplesTensor[i])] = kFoldCrossValidation(kernel,likelihood,modelsList,
+                                                                     int(numSamplesTensor[i]),
+                                                                     completeRandIndices,
+                                                                     xyGrid,
+                                                                     z)
     
         resultsDF = resultsToDF(results,modelType,replicate,params)
-        experimentDF.merge(resultsDF,how='outer')
+        if experimentDF is None:
+            experimentDF  = resultsDF
+        else:
+            experimentDF = pd.concat([experimentDF,resultsDF])
         
     return experimentDF
