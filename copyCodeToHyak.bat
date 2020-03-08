@@ -1,6 +1,6 @@
 set source_dir=C:\Users\pnter\Documents\GitHub\GP-Regression-Research\
 
-set file_list=(LocalGP.py SplittingLocalGP.py SplittingLocalGPTests.py UtilityFunctions.py varBoundFunctions.py LocalGP_Kfold_Crossvalidation.py LocalGPTests.py LocalVariationalGPTests.py MemoryHelper.py)
+set file_list=(LocalGP.py SplittingLocalGP.py SplittingLocalGPTests.py UtilityFunctions.py varBoundFunctions.py LocalGP_Kfold_Crossvalidation.py LocalGPTests.py LocalVariationalGPTests.py MemoryHelper.py ComparisonExperiment.py)
 
 set dest_path=pnterry@mox.hyak.uw.edu://gscratch/choe/pnterry/gp_code
 

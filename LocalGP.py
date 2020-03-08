@@ -226,7 +226,7 @@ class LocalGPChild(gpytorch.models.ExactGP):
         initial train_x,train_y are singleton, and set train_x as the intial
         center for the model.
         '''
-        self.center = train_x
+        self.center = torch.mean(train_x,dim=0)
         self.train_x = train_x
         self.train_y = train_y
         

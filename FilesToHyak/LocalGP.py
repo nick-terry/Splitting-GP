@@ -17,13 +17,7 @@ import copy
 from math import inf
 
 '''
-Implements Local Gaussian Process Regression Models, which use a divide and conquer approach
-to fitting a GP regression
-
-By default, these behave as described by Nguyen-tuong et al., using the parameter w_gen to control
-child model generation.
-
-Splitting local models can be created using the SplittingLocalGPModel class
+Implements the Local Gaussian Process Regression Model as described by Nguyen-tuong et al.
 
 Note that the kernel used in the original paper Local Gaussian Process Regression for Real Time Online Model Learning uses the RBF kernel
 
@@ -70,7 +64,6 @@ class LocalGPModel:
             self.M = kwargs['M']
         else:
             self.M = None
-    
     '''
     Update the LocalGPModel with a pair {x,y}. x may be n-dimensional, y is scalar
     '''
@@ -214,7 +207,7 @@ class LocalGPModel:
         
 class LocalGPChild(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, parent, inheritKernel=True):
-        super(LocalGPChild, self).__init__(train_x, train_y, parent.likelihood())
+        super(LocalGPChild, self).__init__(train_x, train_y, parent.likelihood(MIN_INFERRED_NOISE_LEVEL = 1e-3))
         
         self.parent = parent
         self.mean_module = gpytorch.means.ConstantMean()
@@ -233,7 +226,7 @@ class LocalGPChild(gpytorch.models.ExactGP):
         initial train_x,train_y are singleton, and set train_x as the intial
         center for the model.
         '''
-        self.center = torch.mean(train_x, dim=0)
+        self.center = train_x
         self.train_x = train_x
         self.train_y = train_y
         
@@ -254,10 +247,8 @@ class LocalGPChild(gpytorch.models.ExactGP):
     '''
     def update(self,x,y):
         updatedModel = self.get_fantasy_model(inputs=x, targets=y)
-        
         #Compute the center of the new model
-        updatedModel.train_x = updatedModel.train_inputs[0]
-        updatedModel.center = torch.mean(updatedModel.train_x,dim=0)
+        updatedModel.center = torch.mean(updatedModel.train_inputs[0],dim=0)
         
         #Need to perform a prediction so that get_fantasy_model may be used to update later
         updatedModel.predict(x)
@@ -284,7 +275,7 @@ class LocalGPChild(gpytorch.models.ExactGP):
             self.optimizer.step()
         
         #Need to perform a prediction so that get_fantasy_model may be used to update later
-        self.predict(self.train_x[0].unsqueeze(0))
+        self.predict(self.train_x)
     '''
     Evaluate the child model to get the predictive posterior distribution
     '''
@@ -354,7 +345,7 @@ class LocalGPChild(gpytorch.models.ExactGP):
             
             #Return bound
             return float(k_0 - (torch.norm(self.covar_module(x+torch.zeros(n),train_x,diag=True))**2)/np.max(eigVals))
-
+        
 '''
 A child model which computes an approximate posterior distribution using inducing points.
 '''
