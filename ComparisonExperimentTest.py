@@ -43,15 +43,14 @@ def runExperimentSingleCore():
     return pd.concat(resultsList)
         
 def runExperimentMultiCore():
-    argsList = [(modelType,
-                 {'params':params,'replications':replications,'folds':folds,'maxSamples':maxSamples})
+    argsList = [((modelType,
+                 {'params':params,'replications':replications,'folds':folds,'maxSamples':maxSamples}),)
                 for modelType,params in zip(modelTypes,paramsList)]
     #dont attempt to create more workers than cores, or more than the necessary # of jobs
     if __name__ == '__main__':
         pool = mp.Pool(min(mp.cpu_count(),len(argsList)))    
         results = pool.starmap(runExperimentWithKwargs,argsList)
         pool.close()
-        print(results.get())
         results = pd.concat(results)
     
         return results
