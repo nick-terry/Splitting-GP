@@ -15,6 +15,7 @@ import pandas as pd
 import math
 import copy
 import MemoryHelper
+import multiprocessing as mp
 
 def makeModel(kernelClass,likelihood,w_gen):
     #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
@@ -38,7 +39,7 @@ def makeSplittingLocalGPModels(kernelClass,likelihood,splittingLimit,k):
         models.append(makeSplittingModel(kernelClass, likelihood, splittingLimit))
     return models
 
-def kFoldCrossValidation(kernelClass,likelihood,modelsList,numSamples,completeRandIndices,xyGrid,z):
+def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z):
     # of folds is equal to # of models given
     models = copy.deepcopy(modelsList)
     k = len(models)
@@ -76,14 +77,14 @@ def kFoldCrossValidation(kernelClass,likelihood,modelsList,numSamples,completeRa
         predictions.append(prediction)
         mse = torch.sum(torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2),dim=list(range(prediction.dim())))/(numSamples/k)
        
-        meanSquaredErrors.append(mse)
+        meanSquaredErrors.append(mse.detach())
         elapsedTrainingTimes.append(t1-t0)
         memoryUsages.append(MemoryHelper.getMemoryUsage())
     
     del models
     return {'mse':meanSquaredErrors,'training_time':elapsedTrainingTimes,'memory_usage':memoryUsages}
 
-def resultsToDF(results,modelType,replicate,params):
+def resultsToDF(results,modelType,params):
     for key in results:
         mse = results[key]['mse']
         mse = list(map(lambda x: float(x.detach()),mse))
@@ -98,12 +99,36 @@ def resultsToDF(results,modelType,replicate,params):
     df['model'] = modelType
     paramName = 'splittingLimit' if modelType == 'splitting' else 'w_gen'
     df['params'] = '{0}={1}'.format(paramName, .5 if modelType=='exact' else params[paramName])
-    df['replicate'] = replicate
     
     return df
 
+#Run a single replicate of the experiment
+def runReplicate(replicate, seed, gridDims, maxSamples, xyGrid, z):    
+    #Create the models to be cross validated
+    modelsList = getModelsFunction()
+    
+    #Set the seed for the RNG
+    torch.manual_seed(seed)
+    
+    #Sample some random points
+    completeRandIndices = torch.multinomial(torch.ones((2,gridDims)).float(),maxSamples,replacement=True)
+    
+    numSamplesTensor = torch.linspace(100,maxSamples,maxSamples//100)
+    results = {}
+    for i in range(numSamplesTensor.shape[-1]):
+        print('numSamples={0}'.format(100*(i+1)))
+        results[int(numSamplesTensor[i])] = kFoldCrossValidation(modelsList,
+                                                                 int(numSamplesTensor[i]),
+                                                                 completeRandIndices,
+                                                                 xyGrid,
+                                                                 z)
+        results[int(numSamplesTensor[i])]['replicate'] = replicate
+
+    return results
+
 '''
-Create a new experiment for analyzing a GP model.
+Create and run a new experiment for analyzing a GP model. Replicates of the experiment are performed in parallel using the multiprocessing
+module.
 
 Arguments:
 
@@ -156,9 +181,11 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     
     #Generate a seed for each replicate
     torch.manual_seed(6942069)
-    seeds = torch.floor(100000*torch.rand(size=(replications,1)))
+    seeds = list(map(lambda x: int(x),torch.floor(100000*torch.rand(size=(replications,1)))))
+    replicates = range(replications)
     
-    experimentDF = None
+    
+    global getModelsFunction
     
     #Create a function to get new models for each step of the experiment
     if modelType=='exact':
@@ -168,31 +195,14 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     elif modelType=='splitting':
         def getModelsFunction(): return makeSplittingLocalGPModels(kernel, likelihood, params['splittingLimit'], k)
     
-    for replicate in range(replications):
-        
-        #Create the models to be cross validated
-        modelsList = getModelsFunction()
-        
-        #Set the seed for the RNG
-        torch.manual_seed(int(seeds[replicate]))
-        
-        #Sample some random points
-        completeRandIndices = torch.multinomial(torch.ones((2,gridDims)).float(),maxSamples,replacement=True)
-        
-        numSamplesTensor = torch.linspace(100,maxSamples,maxSamples//100)
-        results = {}
-        for i in range(numSamplesTensor.shape[-1]):
-            print('numSamples={0}'.format(100*(i+1)))
-            results[int(numSamplesTensor[i])] = kFoldCrossValidation(kernel,likelihood,modelsList,
-                                                                     int(numSamplesTensor[i]),
-                                                                     completeRandIndices,
-                                                                     xyGrid,
-                                                                     z)
+    #Create multiprocessing pool for each replicate needed
+    pool = mp.Pool(replications)
     
-        resultsDF = resultsToDF(results,modelType,replicate,params)
-        if experimentDF is None:
-            experimentDF  = resultsDF
-        else:
-            experimentDF = pd.concat([experimentDF,resultsDF])
-        
+    replicateArgsList = [(replicate, seed, gridDims, maxSamples, xyGrid, z) for replicate,seed in zip(replicates,seeds)]
+    results = pool.starmap(runReplicate,replicateArgsList)
+    
+    pool.close()
+    
+    #Convert results dicts into dataframes, then merge
+    experimentDF = pd.concat(list(map(lambda resultDict:resultsToDF(resultDict, modelType, params),results)))
     return experimentDF

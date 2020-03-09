@@ -21,16 +21,19 @@ folds=5
 '''
 
 modelTypes = ['splitting']
-maxSamples = 100
-paramsList = [{'splittingLimit':50}]
-replications = 2
-folds=2
+maxSamples = 2500
+paramsList = [{'splittingLimit':500}]
+replications = 30
+folds=5
 
 #Unpacks the args and kwargs to run the experiment
 def runExperimentWithKwargs(args):
     return LocalGP_Kfold_Crossvalidation.runCrossvalidationExperiment(args[0],**args[1])
 
-def runExperimentSingleCore():
+'''
+Run a sequence of experiments for different model types/parameters
+'''
+def runExperimentSequential():
     resultsList = []
     for modelType,params in zip(modelTypes,paramsList):
         results = LocalGP_Kfold_Crossvalidation.runCrossvalidationExperiment(modelType, 
@@ -48,15 +51,17 @@ def runExperimentMultiCore():
                 for modelType,params in zip(modelTypes,paramsList)]
     #dont attempt to create more workers than cores, or more than the necessary # of jobs
     if __name__ == '__main__':
-        pool = mp.Pool(min(mp.cpu_count(),len(argsList)))    
+        pool = mp.Pool(len(argsList))    
+        
         results = pool.starmap(runExperimentWithKwargs,argsList)
+        
         pool.close()
         results = pd.concat(results)
     
         return results
 
-results = runExperimentMultiCore()
-results.to_csv('multicore-results.csv')
+results = runExperimentSequential()
+results.to_csv('experiment-results-test.csv')
 '''
 results = runExperimentSingleCore()
 results.to_csv('experiment-results-{0}.csv'.format(modelTypes[0]))
