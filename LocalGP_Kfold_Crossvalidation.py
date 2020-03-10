@@ -39,11 +39,20 @@ def makeSplittingLocalGPModels(kernelClass,likelihood,splittingLimit,k):
         models.append(makeSplittingModel(kernelClass, likelihood, splittingLimit))
     return models
 
-def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z):
+'''
+Run a k-fold cross validation of a model. Time is recorded by computing t1-t0, where t1
+is the end time of the crossvalidation, and t0 is the start time. To avoid recomputing
+the model for earlier data points, we just fit the existing model with 100 more data points,
+then add the additional computation time to the existing record. withheldPointsList contains k entries,
+each of which is a list containing the points witheld in the previous model. This avoids
+recomputing the witheld points each iteration.
+'''
+def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,withheldPointsIndices=[]):
     # of folds is equal to # of models given
     models = copy.deepcopy(modelsList)
     k = len(models)
-    randIndices = completeRandIndices[:,:numSamples]
+    #Take only the new 100 data points to be added
+    randIndices = completeRandIndices[:,numSamples-100:numSamples]
     
     predictions = []
     meanSquaredErrors = []
@@ -51,10 +60,11 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z):
     memoryUsages = []
     
     for index,model in zip(range(k),models):
-        #Choose numSamples/k data points to withhold. Note k must divide numSamples.
-        sliceStart = int(index*numSamples/k)
-        sliceEnd = int((index+1)*numSamples/k)
-        includedPointsIndices = list(range(numSamples))
+        #Choose 100/k data points to withhold. Note k must divide number of data points.
+        sliceStart = int(index*100/k)
+        sliceEnd = int((index+1)*100/k)
+        includedPointsIndices = list(range(randIndices.shape[-1]))
+        newlyWitheldPoints = includedPointsIndices[sliceStart:sliceEnd]
         del includedPointsIndices[sliceStart:sliceEnd]
         
         t0 = time.time()
@@ -68,9 +78,12 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z):
         
         t1 = time.time()
         print('Done training model {0}'.format(index))    
-    
+        
+        #Create a list of all withheld points to get OOB MSE
+        withheldPointsIndices += newlyWitheldPoints
+        #withheldPointsIndices = [index for index in range(numSamples) if index not in includedPointsIndices]
+        
         #Predict at withheld points for calculating out of bag MSE
-        withheldPointsIndices = [index for index in range(numSamples) if index not in includedPointsIndices]
         randPairs = randIndices[:,withheldPointsIndices]
         randCoords = xyGrid[randPairs[0,:],randPairs[1,:]].unsqueeze(0)
         prediction = model.predict(randCoords)
@@ -81,8 +94,7 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z):
         elapsedTrainingTimes.append(t1-t0)
         memoryUsages.append(MemoryHelper.getMemoryUsage())
     
-    del models
-    return {'mse':meanSquaredErrors,'training_time':elapsedTrainingTimes,'memory_usage':memoryUsages}
+    return {'mse':meanSquaredErrors,'training_time':elapsedTrainingTimes,'memory_usage':memoryUsages},models,withheldPointsIndices
 
 def resultsToDF(results,modelType,params):
     for key in results:
@@ -93,6 +105,8 @@ def resultsToDF(results,modelType,params):
     df = pd.DataFrame(results).transpose()
     
     df['avg_mse'] = df['mse'].apply(np.mean)
+    #Need to cumulatively sum the entries since we only recorded the time to update each model
+    df['training_time'] = df['training_time'].cumsum()
     df['avg_training_time'] = df['training_time'].apply(np.mean)
     df['avg_training_time_per_update'] = df['avg_training_time']/df.index
     df['avg_memory_usage'] = df['memory_usage'].apply(np.mean)
@@ -112,17 +126,20 @@ def runReplicate(replicate, seed, gridDims, maxSamples, xyGrid, z):
     
     #Sample some random points
     completeRandIndices = torch.multinomial(torch.ones((2,gridDims)).float(),maxSamples,replacement=True)
+    withheldPointsIndices = []
     
     numSamplesTensor = torch.linspace(100,maxSamples,maxSamples//100)
     results = {}
     for i in range(numSamplesTensor.shape[-1]):
+        numSamples = int(numSamplesTensor[i])
         print('numSamples={0}'.format(100*(i+1)))
-        results[int(numSamplesTensor[i])] = kFoldCrossValidation(modelsList,
-                                                                 int(numSamplesTensor[i]),
+        results[numSamples],modelsList,witheldPointsIndices = kFoldCrossValidation(modelsList,
+                                                                 numSamples,
                                                                  completeRandIndices,
                                                                  xyGrid,
-                                                                 z)
-        results[int(numSamplesTensor[i])]['replicate'] = replicate
+                                                                 z,
+                                                                 witheldPointsIndices)
+        results[numSamples]['replicate'] = replicate
 
     return results
 
@@ -205,4 +222,5 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     
     #Convert results dicts into dataframes, then merge
     experimentDF = pd.concat(list(map(lambda resultDict:resultsToDF(resultDict, modelType, params),results)))
+    
     return experimentDF

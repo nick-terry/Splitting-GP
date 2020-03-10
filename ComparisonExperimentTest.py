@@ -21,9 +21,9 @@ folds=5
 '''
 
 modelTypes = ['splitting']
-maxSamples = 2500
+maxSamples = 200
 paramsList = [{'splittingLimit':500}]
-replications = 30
+replications = 3
 folds=5
 
 #Unpacks the args and kwargs to run the experiment
