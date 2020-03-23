@@ -21,10 +21,10 @@ folds=5
 '''
 
 modelTypes = ['splitting']
-maxSamples = 200
+maxSamples = 100
 paramsList = [{'splittingLimit':500}]
-replications = 3
-folds=5
+replications = 2
+folds=2
 
 #Unpacks the args and kwargs to run the experiment
 def runExperimentWithKwargs(args):

@@ -207,7 +207,7 @@ class LocalGPModel:
         
 class LocalGPChild(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, parent, inheritKernel=True):
-        super(LocalGPChild, self).__init__(train_x, train_y, parent.likelihood(MIN_INFERRED_NOISE_LEVEL = 1e-3))
+        super(LocalGPChild, self).__init__(train_x, train_y, parent.likelihood())
         
         self.parent = parent
         self.mean_module = gpytorch.means.ConstantMean()
@@ -246,7 +246,35 @@ class LocalGPChild(gpytorch.models.ExactGP):
     Update the child model to incorporate the training pair {x,y}
     '''
     def update(self,x,y):
-        updatedModel = self.get_fantasy_model(inputs=x, targets=y)
+        if self.prediction_strategy is None:
+            self.predict(x)
+        
+        '''
+        Due to accumulating numerical error, sometimes get an error when
+        attempting Cholesky decomposition of a matrix with negative entries.
+        In this case, refit a new model.
+        '''
+        try:
+            updatedModel = self.get_fantasy_model(inputs=x, targets=y)
+        
+        except RuntimeError as e:
+            print('Error during Cholesky decomp for fantasy update. Fitting new model...')
+            
+            newInputs = torch.cat([self.train_x,x],dim=0)
+            newTargets = torch.cat([self.train_y,y],dim=0)
+            updatedModel = LocalGPChild(newInputs,newTargets,self.parent)
+        
+        except RuntimeWarning as e:
+            print('Error during Cholesky decomp for fantasy update. Fitting new model...')
+            
+            newInputs = torch.cat([self.train_x,x],dim=0)
+            newTargets = torch.cat([self.train_y,y],dim=0)
+            updatedModel = LocalGPChild(newInputs,newTargets,self.parent)
+        
+        #Update the data properties
+        updatedModel.train_x = updatedModel.train_inputs[0]
+        updatedModel.train_y = updatedModel.train_targets
+        
         #Compute the center of the new model
         updatedModel.center = torch.mean(updatedModel.train_inputs[0],dim=0)
         
@@ -285,6 +313,7 @@ class LocalGPChild(gpytorch.models.ExactGP):
         self.likelihood.eval()
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             prediction = self.likelihood(self(x))
+        
         return prediction
     
     '''

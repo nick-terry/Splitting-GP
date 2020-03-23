@@ -64,7 +64,7 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,with
         sliceStart = int(index*100/k)
         sliceEnd = int((index+1)*100/k)
         includedPointsIndices = list(range(randIndices.shape[-1]))
-        newlyWitheldPoints = includedPointsIndices[sliceStart:sliceEnd]
+        newlyWithheldPoints = includedPointsIndices[sliceStart:sliceEnd]
         del includedPointsIndices[sliceStart:sliceEnd]
         
         t0 = time.time()
@@ -80,7 +80,7 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,with
         print('Done training model {0}'.format(index))    
         
         #Create a list of all withheld points to get OOB MSE
-        withheldPointsIndices += newlyWitheldPoints
+        withheldPointsIndices += newlyWithheldPoints
         #withheldPointsIndices = [index for index in range(numSamples) if index not in includedPointsIndices]
         
         #Predict at withheld points for calculating out of bag MSE
@@ -100,19 +100,23 @@ def resultsToDF(results,modelType,params):
     for key in results:
         mse = results[key]['mse']
         mse = list(map(lambda x: float(x.detach()),mse))
-        results[key] = {'mse':mse,'training_time':results[key]['training_time'],'memory_usage':results[key]['memory_usage']}
+        results[key] = {'mse':mse,'training_time':torch.tensor(results[key]['training_time']),
+                        'memory_usage':results[key]['memory_usage'],
+                        'replicate':results[key]['replicate']}
     
     df = pd.DataFrame(results).transpose()
     
     df['avg_mse'] = df['mse'].apply(np.mean)
     #Need to cumulatively sum the entries since we only recorded the time to update each model
-    df['training_time'] = df['training_time'].cumsum()
-    df['avg_training_time'] = df['training_time'].apply(np.mean)
+    df['training_time'] = df['training_time'].cumsum().tolist()
+    df['avg_training_time'] = df['training_time'].apply(torch.mean)
+    df['avg_training_time'] = df['avg_training_time'].apply(float)
     df['avg_training_time_per_update'] = df['avg_training_time']/df.index
     df['avg_memory_usage'] = df['memory_usage'].apply(np.mean)
     df['model'] = modelType
     paramName = 'splittingLimit' if modelType == 'splitting' else 'w_gen'
     df['params'] = '{0}={1}'.format(paramName, .5 if modelType=='exact' else params[paramName])
+    df['replicate'] = results[list(results.keys())[0]]['replicate']
     
     return df
 
@@ -133,12 +137,12 @@ def runReplicate(replicate, seed, gridDims, maxSamples, xyGrid, z):
     for i in range(numSamplesTensor.shape[-1]):
         numSamples = int(numSamplesTensor[i])
         print('numSamples={0}'.format(100*(i+1)))
-        results[numSamples],modelsList,witheldPointsIndices = kFoldCrossValidation(modelsList,
+        results[numSamples],modelsList,withheldPointsIndices = kFoldCrossValidation(modelsList,
                                                                  numSamples,
                                                                  completeRandIndices,
                                                                  xyGrid,
                                                                  z,
-                                                                 witheldPointsIndices)
+                                                                 withheldPointsIndices)
         results[numSamples]['replicate'] = replicate
 
     return results
@@ -186,6 +190,7 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     
     #Evaluate a function to approximate
     z = (5*torch.sin(xyGrid[:,:,0]**2+(2*xyGrid[:,:,1])**2)+3*xyGrid[:,:,0]).reshape((gridDims,gridDims,1))
+    z += torch.randn(z.shape) * torch.max(z) * .05
     
     #Set # of folds for cross-validation
     k = kwargs['folds'] if 'folds' in kwargs else 5
