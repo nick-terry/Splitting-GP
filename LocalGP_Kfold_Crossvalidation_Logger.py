@@ -16,6 +16,7 @@ import math
 import copy
 import MemoryHelper
 import multiprocessing as mp
+from memory_profiler import profile
 
 def makeModel(kernelClass,likelihood,w_gen,**kwargs):
     if 'maxChildren' in kwargs:
@@ -45,6 +46,9 @@ def makeSplittingLocalGPModels(kernelClass,likelihood,splittingLimit,k):
         models.append(makeSplittingModel(kernelClass, likelihood, splittingLimit))
     return models
 
+#Create a log file to track memory usage for the experiment
+logFile = open('experiment-memory-log-{0{.txt'.format(time.time()),'w+')
+
 '''
 Run a k-fold cross validation of a model. Time is recorded by computing t1-t0, where t1
 is the end time of the crossvalidation, and t0 is the start time. To avoid recomputing
@@ -53,6 +57,7 @@ then add the additional computation time to the existing record. withheldPointsL
 each of which is a list containing the points witheld in the previous model. This avoids
 recomputing the witheld points each iteration.
 '''
+@profile(stream=logFile)
 def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,withheldPointsIndices=[]):
     # of folds is equal to # of models given
     models = copy.deepcopy(modelsList)
@@ -229,11 +234,15 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     pool = mp.Pool(replications)
     
     replicateArgsList = [(replicate, seed, gridDims, maxSamples, xyGrid, z) for replicate,seed in zip(replicates,seeds)]
+    
     results = pool.starmap(runReplicate,replicateArgsList)
     
     pool.close()
     
     #Convert results dicts into dataframes, then merge
     experimentDF = pd.concat(list(map(lambda resultDict:resultsToDF(resultDict, modelType, params),results)))
+    
+    #Close the log file
+    logFile.close()
     
     return experimentDF

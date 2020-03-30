@@ -65,6 +65,9 @@ class SplittingLocalGPModel(LocalGPModel):
             children = [children] 
         self.children += children
         
+        #Due to the order of training, the last child updated is the last child in the list
+        self.setChildLastUpdated(self.children[-1])
+        
         #Need to update the parent
         for child in self.children:
             child.parent = self
@@ -87,6 +90,7 @@ class SplittingLocalGPChild(LocalGPChild):
     def __init__(self, train_x, train_y, parent, inheritKernel=True):
         super(SplittingLocalGPChild,self).__init__(train_x, train_y, parent, inheritKernel)
         
+        
     '''
     Split the child model into k smaller models. Divide the inputs amongst the 
     models using Lloyd's algorithm to compute an approximate k-means clustering.
@@ -107,25 +111,14 @@ class SplittingLocalGPChild(LocalGPChild):
         train_x_list = [train_xDet[labels==i] for i in range(k)]
         train_y_list = [train_yDet[labels==i] for i in range(k)]
         
-        '''
-        #Create a multiprocessing pool for fitting new models. Do not attempt
-        #to create a pool with more processors than are available.
-        pool = mp.Pool(min(k,mp.cpu_count()))
-        
-        #Define arguments for creating new child models
-        newChildrenArgs=[(train_x,train_y,self.parent,self.parent.inheritKernel) for train_x,train_y in zip(train_x_list,train_y_list)]
-        
-        #Create the new child models
-        newChildren = pool.apply(SplittingLocalGPChild, args=newChildrenArgs)
-        
-        #Close the multiprocessing pool
-        pool.close()
-        '''
         newChildrenArgs=[(train_x,train_y,self.parent,self.parent.inheritKernel) for train_x,train_y in zip(train_x_list,train_y_list)]
         newChildren = []
         
         for args in newChildrenArgs:
             newChildren.append(SplittingLocalGPChild(*args))
+            
+            for child in newChildren:
+                print(child.covar_module.state_dict())
         
         return newChildren
     
@@ -141,8 +134,15 @@ class SplittingLocalGPChild(LocalGPChild):
         
         else:
             '''
-            Due to accumulating numerical error, sometimes get an error when
-            attempting Cholesky decomposition of a matrix with negative entries.
+            If this was the last child to be updated, or inheritKernel=False, we can do a fantasy update
+            without updating the covar cache. Otherwise, we can do a rank-one update of the covar cache
+            prior to the fantasy update.
+            '''
+            if not (self.lastUpdated or self.parent.inheritKernel==False):
+                self.updateInvCovarCache()
+            
+            '''
+            Sometimes get an error when attempting Cholesky decomposition.
             In this case, refit a new model.
             '''
             try:
@@ -150,14 +150,14 @@ class SplittingLocalGPChild(LocalGPChild):
             
             except RuntimeError as e:
                 print('Error during Cholesky decomp for fantasy update. Fitting new model...')
-                
+                raise e
                 newInputs = torch.cat([self.train_x,x],dim=0)
                 newTargets = torch.cat([self.train_y,y],dim=0)
                 updatedModel = SplittingLocalGPChild(newInputs,newTargets,self.parent)
             
             except RuntimeWarning as e:
                 print('Error during Cholesky decomp for fantasy update. Fitting new model...')
-                
+                raise e
                 newInputs = torch.cat([self.train_x,x],dim=0)
                 newTargets = torch.cat([self.train_y,y],dim=0)
                 updatedModel = SplittingLocalGPChild(newInputs,newTargets,self.parent)

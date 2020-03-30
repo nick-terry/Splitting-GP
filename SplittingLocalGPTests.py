@@ -40,7 +40,7 @@ def evalModel(w_gen,numSamples):
     def makeModel(kernelClass,likelihood,w_gen):
         #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
         model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=2),
-                                                       splittingLimit=3,inheritKernel=True)
+                                                       splittingLimit=5,inheritKernel=True)
         return model
         
     def makeModels(kernelClass,likelihood,w_gen,k):
@@ -48,7 +48,6 @@ def evalModel(w_gen,numSamples):
         for i in range(k):
             models.append(makeModel(kernelClass, likelihood, w_gen))
         return models
-    
     
     model = makeModel(kernel,likelihood,w_gen=w_gen)
     t0 = time.time()
@@ -58,13 +57,16 @@ def evalModel(w_gen,numSamples):
         x_train = xyGrid[randPair[0],randPair[1]].unsqueeze(0)
         y_train = z[randPair[0],randPair[1]]
         model.update(x_train,y_train)
-        print(j)
+        print('observation: {0}'.format(j))
+        childrenNumData = list(map(lambda child:child.train_x.shape[0],model.children))
+        for childNum,childNumData in zip(range(len(childrenNumData)),childrenNumData):
+            print('data in child model {0}: {1}'.format(childNum,childNumData)) 
         j += 1
     t1 = time.time()
     print('Done training')
     return t1-t0,model,z,randIndices
 
-numSamplesVals = [100]
+numSamplesVals = [2000]
 runtimes = {}
 for numSamples in numSamplesVals:
     runtimes[numSamples] = evalModel(.5,numSamples)

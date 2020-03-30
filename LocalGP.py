@@ -9,12 +9,15 @@ import torch
 import gpytorch
 
 from gpytorch.utils.broadcasting import _mul_broadcast_shape
+from gpytorch.utils.memoize import add_to_cache, is_in_cache
 
 from varBoundFunctions import *
 import numpy as np
 import itertools
 import copy
 from math import inf
+
+from UtilityFunctions import updateInverseCovarWoodbury
 
 '''
 Implements the Local Gaussian Process Regression Model as described by Nguyen-tuong et al.
@@ -83,7 +86,11 @@ class LocalGPModel:
                 
                 closestChildModel = self.children[closestChildIndex]
                 #Create a new model which additionally incorporates the pair {x,y}
-                newChildModel = closestChildModel.update(x,y)
+                newChildModel = closestChildModel.update(x,y)            
+                
+                #Set other child to be last updated
+                self.setChildLastUpdated(newChildModel)
+                
                 #Replace the existing model with the new model which incorporates new data
                 self.children[closestChildIndex] = newChildModel
                 del closestChildModel
@@ -106,9 +113,19 @@ class LocalGPModel:
             newChildModel = LocalGPChild(x,y,self,self.inheritKernel)
         else:
             newChildModel = ApproximateGPChild(x,y,self,self.inheritKernel)
+        
+        #Set other children to not be last updated.
+        self.setChildLastUpdated(newChildModel)
+        
         #Add to the list of child models
         self.children.append(newChildModel)
-        
+    
+    def setChildLastUpdated(self,child):
+        for _child in self.children:
+            _child.lastUpdated = False
+        child.lastUpdated = True
+            
+    
     '''
     Return a pytorch tensor of the centers of all child models.
     '''
@@ -221,6 +238,8 @@ class LocalGPChild(gpytorch.models.ExactGP):
             self.covar_module = parent.covar_module
         else:
             self.covar_module = copy.deepcopy(parent.covar_module)
+        self.lastUpdated = True
+        
         '''
         Since the data is assumed to arrive as pairs {x,y}, we assume that the 
         initial train_x,train_y are singleton, and set train_x as the intial
@@ -250,11 +269,19 @@ class LocalGPChild(gpytorch.models.ExactGP):
             self.predict(x)
         
         '''
-        Due to accumulating numerical error, sometimes get an error when
-        attempting Cholesky decomposition of a matrix with negative entries.
+        If this was the last child to be updated, or inheritKernel=False, we can do a fantasy update
+        without updating the covar cache. Otherwise, we can do a rank-one update of the covar cache
+        prior to the fantasy update.
+        '''
+        if not (self.lastUpdated or self.parent.inheritKernel==False):
+            self.updateInvCovarCache()
+        
+        '''
+        Sometimes get an error when attempting Cholesky decomposition.
         In this case, refit a new model.
         '''
         try:
+            
             updatedModel = self.get_fantasy_model(inputs=x, targets=y)
         
         except RuntimeError as e:
@@ -280,8 +307,34 @@ class LocalGPChild(gpytorch.models.ExactGP):
         
         #Need to perform a prediction so that get_fantasy_model may be used to update later
         updatedModel.predict(x)
+        
         return updatedModel
     
+    '''
+    Perform a rank-one update of the child model's inverse covariance matrix cache.
+    This is necessary if the model is is NOT the most recently updated child model.
+    '''
+    def updateInvCovarCache(self,update=False):
+        lazy_covar = self.prediction_strategy.lik_train_train_covar
+        if is_in_cache(lazy_covar,"root_inv_decomposition"):
+            if update:
+                #Get the old cached inverse covar matrix 
+                K_0inv = lazy_covar.root_inv_decomposition()
+                #Get the new covar matrix by calling the covar module on the training data
+                K = self.covar_module(self.train_x)
+                #Compute the rank-one update
+                Kinv = updateInverseCovarWoodbury(K_0inv, K)
+                #Store updated inverse covar matrix in cache
+                add_to_cache(lazy_covar, "root_inv_decomposition", RootLazyTensor(torch.sqrt(Kinv)))
+            else:
+                #This is a bit dirty, but here we will simply delete the root/root_inv from cache. This forces
+                #GPyTorch to recompute them.
+                
+                lazy_covar._memoize_cache.pop("root_inv_decomposition")
+                
+                if is_in_cache(lazy_covar,"root_decomposition"):
+                    lazy_covar._memoize_cache.pop("root_decomposition")
+                
     '''
     Setup optimizer and perform initial training
     '''
