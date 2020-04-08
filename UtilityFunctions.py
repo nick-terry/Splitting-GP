@@ -49,7 +49,7 @@ K^-1 = K_0^-1 - K_0^-1(I-(K-K_0)K_0^-1)^-1(K-K_0)K_0^-1
 
 which simplifies to:
     
-K^-1 = K_0^-1*K*K_0^-1    
+K^-1 = 2*K_0^-1 - K_0^-1*K*K_0^-1    
 
 Arguments:
     
@@ -61,4 +61,4 @@ Returns:
     Kinv -- the rank one update of the inverse of K
 '''
 def updateInverseCovarWoodbury(K_0inv,K):
-    return K_0inv.matmul(K).matmul(K_0inv)
+    return 2*K_0inv - K_0inv.matmul(K).matmul(K_0inv)

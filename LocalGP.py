@@ -38,6 +38,7 @@ class LocalGPModel:
         self.children = []
         self.w_gen = kwargs['w_gen'] if 'w_gen' in kwargs else .5
         self.covar_module = kernel
+        self.mean_module = kwargs['mean'] if 'mean' in kwargs else gpytorch.means.ConstantMean
         self.likelihood = likelihoodFn
         self.inheritKernel = inheritKernel
         
@@ -227,7 +228,7 @@ class LocalGPChild(gpytorch.models.ExactGP):
         super(LocalGPChild, self).__init__(train_x, train_y, parent.likelihood())
         
         self.parent = parent
-        self.mean_module = gpytorch.means.ConstantMean()
+        self.mean_module = parent.mean_module()
         
         '''
         If inheritKernel is set to True, then the same Kernel function (including the same hyperparameters)
@@ -289,14 +290,16 @@ class LocalGPChild(gpytorch.models.ExactGP):
             
             newInputs = torch.cat([self.train_x,x],dim=0)
             newTargets = torch.cat([self.train_y,y],dim=0)
-            updatedModel = LocalGPChild(newInputs,newTargets,self.parent)
+            updatedModel = LocalGPChild(newInputs,newTargets,self.parent,
+                                        inheritKernel=self.parent.inheritKernel)
         
         except RuntimeWarning as e:
             print('Error during Cholesky decomp for fantasy update. Fitting new model...')
             
             newInputs = torch.cat([self.train_x,x],dim=0)
             newTargets = torch.cat([self.train_y,y],dim=0)
-            updatedModel = LocalGPChild(newInputs,newTargets,self.parent)
+            updatedModel = LocalGPChild(newInputs,newTargets,self.parent,
+                                        inheritKernel=self.parent.inheritKernel)
         
         #Update the data properties
         updatedModel.train_x = updatedModel.train_inputs[0]
@@ -322,7 +325,7 @@ class LocalGPChild(gpytorch.models.ExactGP):
                 K_0inv = lazy_covar.root_inv_decomposition()
                 #Get the new covar matrix by calling the covar module on the training data
                 K = self.covar_module(self.train_x)
-                #Compute the rank-one update
+                #Compute the update
                 Kinv = updateInverseCovarWoodbury(K_0inv, K)
                 #Store updated inverse covar matrix in cache
                 add_to_cache(lazy_covar, "root_inv_decomposition", RootLazyTensor(torch.sqrt(Kinv)))
@@ -330,10 +333,8 @@ class LocalGPChild(gpytorch.models.ExactGP):
                 #This is a bit dirty, but here we will simply delete the root/root_inv from cache. This forces
                 #GPyTorch to recompute them.
                 
-                lazy_covar._memoize_cache.pop("root_inv_decomposition")
-                
-                if is_in_cache(lazy_covar,"root_decomposition"):
-                    lazy_covar._memoize_cache.pop("root_decomposition")
+                lazy_covar._memoize_cache = {}
+                self.prediction_strategy._memoize_cache = {}
                 
     '''
     Setup optimizer and perform initial training

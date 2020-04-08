@@ -117,8 +117,10 @@ class SplittingLocalGPChild(LocalGPChild):
         for args in newChildrenArgs:
             newChildren.append(SplittingLocalGPChild(*args))
             
+            '''
             for child in newChildren:
                 print(child.covar_module.state_dict())
+            '''
         
         return newChildren
     
@@ -130,6 +132,8 @@ class SplittingLocalGPChild(LocalGPChild):
         #Check if the new pair will make the model larger than the threshold
         if self.train_x.shape[0] >= self.parent.splittingLimit:
             print('Splitting a local child model...')
+            self.train_x = torch.cat((self.train_x,x))
+            self.train_y = torch.cat((self.train_y,y))
             return self.split()
         
         else:
@@ -139,7 +143,7 @@ class SplittingLocalGPChild(LocalGPChild):
             prior to the fantasy update.
             '''
             if not (self.lastUpdated or self.parent.inheritKernel==False):
-                self.updateInvCovarCache()
+                self.updateInvCovarCache(update=True)
             
             '''
             Sometimes get an error when attempting Cholesky decomposition.
@@ -153,14 +157,16 @@ class SplittingLocalGPChild(LocalGPChild):
                 raise e
                 newInputs = torch.cat([self.train_x,x],dim=0)
                 newTargets = torch.cat([self.train_y,y],dim=0)
-                updatedModel = SplittingLocalGPChild(newInputs,newTargets,self.parent)
+                updatedModel = SplittingLocalGPChild(newInputs,newTargets,self.parent,
+                                                     inheritKernel=self.parent.inheritKernel)
             
             except RuntimeWarning as e:
                 print('Error during Cholesky decomp for fantasy update. Fitting new model...')
                 raise e
                 newInputs = torch.cat([self.train_x,x],dim=0)
                 newTargets = torch.cat([self.train_y,y],dim=0)
-                updatedModel = SplittingLocalGPChild(newInputs,newTargets,self.parent)
+                updatedModel = SplittingLocalGPChild(newInputs,newTargets,self.parent,
+                                                     inheritKernel=self.parent.inheritKernel)
                 
                 
             #Update the data properties

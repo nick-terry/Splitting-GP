@@ -18,10 +18,10 @@ import MemoryHelper
 import multiprocessing as mp
 import GPLogger
 
-logger = GPLogger.ExperimentLogger('splitting-log.txt')
+logger = GPLogger.ExperimentLogger('zeromean-log.txt')
 
 def makeExactModel(kernelClass,likelihood,inheritKernel=True,fantasyUpdate=False):
-    return RegularGP.RegularGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel,fantasyUpdate)
+    return RegularGP.RegularGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel,fantasyUpdate,mean=gpytorch.means.ZeroMean)
 
 def makeExactModels(kernelClass,likelihood,k,inheritKernel=True,fantasyUpdate=False):
     models = []
@@ -31,7 +31,8 @@ def makeExactModels(kernelClass,likelihood,k,inheritKernel=True,fantasyUpdate=Fa
 
 def makeLocalModel(kernelClass,likelihood,w_gen,**kwargs):
     if 'maxChildren' in kwargs:
-        model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel=True,w_gen=w_gen,maxChildren=kwargs['maxChildren'])
+        model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel=True,w_gen=w_gen,maxChildren=kwargs['maxChildren'],
+                                     mean=gpytorch.means.ZeroMean)
     #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
     else:
         model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel=True,w_gen=w_gen)
@@ -39,7 +40,8 @@ def makeLocalModel(kernelClass,likelihood,w_gen,**kwargs):
 
 def makeSplittingModel(kernelClass,likelihood,splittingLimit):
     #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
-    model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=2),splittingLimit,inheritKernel=True)
+    model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=2),splittingLimit,inheritKernel=True,
+                                                   mean=gpytorch.means.ZeroMean)
     return model
     
 def makeLocalGPModels(kernelClass,likelihood,w_gen,k,**kwargs):
@@ -66,6 +68,7 @@ each of which is a list containing the points witheld in the previous model. Thi
 recomputing the witheld points each iteration.
 '''
 def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,withheldPointsIndices=[]):
+    global logger
     # of folds is equal to # of models given
     models = copy.deepcopy(modelsList)
     k = len(models)
@@ -95,11 +98,10 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,with
             model.update(x_train,y_train)
         
         t1 = time.time()
-        print('Done training model {0}'.format(index))    
+        print('Done with fold {0}'.format(index))    
         
         #Create a list of all withheld points to get OOB MSE
         withheldPointsIndices[index] += newlyWithheldPoints
-        #withheldPointsIndices = [index for index in range(numSamples) if index not in includedPointsIndices]
         
         #Predict at withheld points for calculating out of bag MSE
         randPairs = randIndices[:,withheldPointsIndices[index]]
@@ -107,8 +109,8 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,with
         prediction = model.predict(randCoords)
         predictions.append(prediction)
         mse = torch.sum(torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2),dim=list(range(prediction.dim())))/(numSamples/k)
-       
-         #If the MSE is very high, log some key info to debug
+        
+        #If the MSE is very high, log some key info to debug
         if(mse>1):
             newTestPairs=randIndices[:,newlyWithheldPoints]
             newTestPoints = xyGrid[newTestPairs[0,:],newTestPairs[1,:]].unsqueeze(0)    
@@ -140,7 +142,7 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,with
                                  fold=fold,
                                  mse=mse,
                                  squaredErrors=squaredErrors)
-        
+            
         meanSquaredErrors.append(mse.detach())
         elapsedTrainingTimes.append(t1-t0)
         memoryUsages.append(MemoryHelper.getMemoryUsage())
@@ -246,9 +248,12 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     #Evaluate a function to approximate
     z = (5*torch.sin((xyGrid[:,:,0]+.5)**2+(2*xyGrid[:,:,1]+.5)**2)+
          5*torch.sin((xyGrid[:,:,0]-.5)**2+(2*xyGrid[:,:,1]-.5)**2)).reshape((gridDims,gridDims,1))
-    z -= torch.mean(z)
+    
     #z = (5*torch.sin(xyGrid[:,:,0]**2+(2*xyGrid[:,:,1])**2)+3*xyGrid[:,:,0]).reshape((gridDims,gridDims,1))
     z += torch.randn(z.shape) * torch.max(z) * .05
+    
+    #Give z a zero mean
+    z -= torch.mean(z,dim=list(range(z.dim())))
     
     #Set # of folds for cross-validation
     k = kwargs['folds'] if 'folds' in kwargs else 5
