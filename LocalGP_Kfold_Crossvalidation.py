@@ -81,36 +81,45 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,with
         #Choose 100/k data points to withhold. Note k must divide number of data points.
         sliceStart = int(index*100/k)
         sliceEnd = int((index+1)*100/k)
+        #These are the indices of the 100 new points being considered
         includedPointsIndices = list(range(randIndices.shape[-1]))
-        newlyWithheldPoints = includedPointsIndices[sliceStart:sliceEnd]
+        #These are the points out of 100 which are held out for cross validation
+        newlyWithheldPoints = list(map(lambda i: i + numSamples - 100,includedPointsIndices[sliceStart:sliceEnd]))
         del includedPointsIndices[sliceStart:sliceEnd]
         
         t0 = time.time()
-        
         #Train the model with 1/k th of the data withheld
-        for randPairIndex in includedPointsIndices:
+        for ptno,randPairIndex in zip(range(len(includedPointsIndices)),includedPointsIndices):
             randPair = randIndices[:,randPairIndex]
             x_train = xyGrid[randPair[0],randPair[1]].unsqueeze(0)
             y_train = z[randPair[0],randPair[1]]
+            
+            childCount = len(model.children)
+            
             model.update(x_train,y_train)
-        
+            
+            if(childCount>0 and len(model.children)>childCount):
+                model.lastSplit = numSamples - 100 + ptno + 1
+                print('split: {0}'.format(model.lastSplit))
+                
         t1 = time.time()
-        print('Done training model {0}'.format(index))    
+        print('Done with fold {0}'.format(index))    
         
-        #Create a list of all withheld points to get OOB MSE
+        #Add newly withheld points to get OOB MSE
         withheldPointsIndices[index] += newlyWithheldPoints
+        
         #withheldPointsIndices = [index for index in range(numSamples) if index not in includedPointsIndices]
         
         #Predict at withheld points for calculating out of bag MSE
-        randPairs = randIndices[:,withheldPointsIndices[index]]
+        randPairs = completeRandIndices[:,withheldPointsIndices[index]]
         randCoords = xyGrid[randPairs[0,:],randPairs[1,:]].unsqueeze(0)
         prediction = model.predict(randCoords)
         predictions.append(prediction)
         mse = torch.sum(torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2),dim=list(range(prediction.dim())))/(numSamples/k)
        
          #If the MSE is very high, log some key info to debug
-        if(mse>1):
-            newTestPairs=randIndices[:,newlyWithheldPoints]
+        if(mse>40):
+            newTestPairs = completeRandIndices[:,newlyWithheldPoints]
             newTestPoints = xyGrid[newTestPairs[0,:],newTestPairs[1,:]].unsqueeze(0)    
             trainingData = []
             kernelHyperParams = []
@@ -118,6 +127,7 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,with
             centers = []
             numObsList = []
             fold = k
+            lastSplit = model.lastSplit
             
             squaredErrors = torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2)
             
@@ -139,7 +149,8 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,with
                                  numObsList=numObsList,
                                  fold=fold,
                                  mse=mse,
-                                 squaredErrors=squaredErrors)
+                                 squaredErrors=squaredErrors,
+                                 lastSplit=lastSplit)
         
         meanSquaredErrors.append(mse.detach())
         elapsedTrainingTimes.append(t1-t0)
@@ -179,6 +190,9 @@ def resultsToDF(results,modelType,params):
 def runReplicate(replicate, seed, gridDims, maxSamples, xyGrid, z):    
     #Create the models to be cross validated
     modelsList = getModelsFunction()
+    
+    for model in modelsList:
+        model.lastSplit = -1
     
     #Set the seed for the RNG
     torch.manual_seed(seed)
@@ -240,12 +254,13 @@ def runCrossvalidationExperiment(modelType,**kwargs):
         
     #Construct a grid of input points
     gridDims = kwargs['gridDims'] if 'gridDims' in kwargs else 100
-    x,y = torch.meshgrid([torch.linspace(-1,1,gridDims), torch.linspace(-1,1,gridDims)])
+    scale = 50
+    x,y = torch.meshgrid([torch.linspace(-scale,scale,gridDims), torch.linspace(-scale,scale,gridDims)])
     xyGrid = torch.stack([x,y],dim=2).float()
     
     #Evaluate a function to approximate
-    z = (5*torch.sin((xyGrid[:,:,0]+.5)**2+(2*xyGrid[:,:,1]+.5)**2)+
-         5*torch.sin((xyGrid[:,:,0]-.5)**2+(2*xyGrid[:,:,1]-.5)**2)).reshape((gridDims,gridDims,1))
+    z = (5*torch.sin((xyGrid[:,:,0]/scale+.5)**2+(2*xyGrid[:,:,1]/scale+.5)**2)+
+         5*torch.sin((xyGrid[:,:,0]/scale-.5)**2+(2*xyGrid[:,:,1]/scale-.5)**2)).reshape((gridDims,gridDims,1))
     z -= torch.mean(z)
     #z = (5*torch.sin(xyGrid[:,:,0]**2+(2*xyGrid[:,:,1])**2)+3*xyGrid[:,:,0]).reshape((gridDims,gridDims,1))
     z += torch.randn(z.shape) * torch.max(z) * .05

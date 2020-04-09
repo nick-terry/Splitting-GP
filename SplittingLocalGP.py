@@ -130,7 +130,7 @@ class SplittingLocalGPChild(LocalGPChild):
     '''
     def update(self, x, y):
         #Check if the new pair will make the model larger than the threshold
-        if self.train_x.shape[0] >= self.parent.splittingLimit:
+        if self.train_x.shape[0] + 1 >= self.parent.splittingLimit:
             print('Splitting a local child model...')
             self.train_x = torch.cat((self.train_x,x))
             self.train_y = torch.cat((self.train_y,y))
@@ -142,8 +142,9 @@ class SplittingLocalGPChild(LocalGPChild):
             without updating the covar cache. Otherwise, we can do a rank-one update of the covar cache
             prior to the fantasy update.
             '''
-            if not (self.lastUpdated or self.parent.inheritKernel==False):
-                self.updateInvCovarCache(update=True)
+            if not self.lastUpdated and self.parent.inheritKernel:
+                self.covar_module = self.parent.covar_module
+                self.predict(x)
             
             '''
             Sometimes get an error when attempting Cholesky decomposition.
@@ -154,7 +155,7 @@ class SplittingLocalGPChild(LocalGPChild):
             
             except RuntimeError as e:
                 print('Error during Cholesky decomp for fantasy update. Fitting new model...')
-                raise e
+
                 newInputs = torch.cat([self.train_x,x],dim=0)
                 newTargets = torch.cat([self.train_y,y],dim=0)
                 updatedModel = SplittingLocalGPChild(newInputs,newTargets,self.parent,
@@ -162,7 +163,7 @@ class SplittingLocalGPChild(LocalGPChild):
             
             except RuntimeWarning as e:
                 print('Error during Cholesky decomp for fantasy update. Fitting new model...')
-                raise e
+
                 newInputs = torch.cat([self.train_x,x],dim=0)
                 newTargets = torch.cat([self.train_y,y],dim=0)
                 updatedModel = SplittingLocalGPChild(newInputs,newTargets,self.parent,
@@ -175,6 +176,9 @@ class SplittingLocalGPChild(LocalGPChild):
             
             #Compute the center of the new model
             updatedModel.center = torch.mean(updatedModel.train_x,dim=0)
+            
+            #Update parent's covar_module
+            self.parent.covar_module = self.covar_module
             
             #Need to perform a prediction so that get_fantasy_model may be used to update later
             updatedModel.predict(x)

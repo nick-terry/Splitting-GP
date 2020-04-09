@@ -271,11 +271,11 @@ class LocalGPChild(gpytorch.models.ExactGP):
         
         '''
         If this was the last child to be updated, or inheritKernel=False, we can do a fantasy update
-        without updating the covar cache. Otherwise, we can do a rank-one update of the covar cache
-        prior to the fantasy update.
+        without updating the covar cache. Otherwise, we can update the covar_module from the parent
         '''
-        if not (self.lastUpdated or self.parent.inheritKernel==False):
-            self.updateInvCovarCache()
+        if not self.lastUpdated and self.parent.inheritKernel:
+                self.covar_module = self.parent.covar_module
+                self.predict(x)
         
         '''
         Sometimes get an error when attempting Cholesky decomposition.
@@ -307,6 +307,9 @@ class LocalGPChild(gpytorch.models.ExactGP):
         
         #Compute the center of the new model
         updatedModel.center = torch.mean(updatedModel.train_inputs[0],dim=0)
+        
+        #Update parent's covar_module
+        self.parent.covar_module = self.covar_module
         
         #Need to perform a prediction so that get_fantasy_model may be used to update later
         updatedModel.predict(x)

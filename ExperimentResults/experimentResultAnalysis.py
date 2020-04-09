@@ -39,8 +39,8 @@ def getSummaryStats(df):
 df = loadFiles()
 
 series = {}
-#models = ['splitting','local','exact']
-models = ['splitting']
+models = ['splitting','local','exact']
+#models = ['splitting']
 metrics = ['avg_mse','avg_memory_usage','avg_training_time']
 ylabels = ['MSE','Memory Usage (Kb)','Training Time (sec)']
 for metric in metrics:
@@ -51,7 +51,7 @@ for metric in metrics:
         
 for model in models:
     #toyFnNoiseData = df.loc[(df['model']==model)&(df['response_function']=='bimodal')&(df['noise']==1)&(df['params']=='fantasyUpdate=False')]
-    toyFnNoiseData = df.loc[(df['model']==model)&(df['response_function']=='bimodal')&(df['noise']==1)&(df['mean']=='zero')]
+    toyFnNoiseData = df.loc[(df['model']==model)&(df['response_function']=='bimodal')&(df['noise']==1)&(df['mean']=='constant')]
     stats = getSummaryStats(toyFnNoiseData)
     for metric in metrics:
         #series[metric].append(stats[0][metric][:25])

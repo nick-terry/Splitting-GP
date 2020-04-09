@@ -17,22 +17,22 @@ torch.set_printoptions(profile="full")
 
 class ExperimentLogger:
     
-    def __init__(self,logfilename='experiment-log.txt',loggingLevel=logging.DEBUG):
+    def __init__(self,logfilename='/logs/experiment-log.txt',loggingLevel=logging.DEBUG):
         self.logfilename = logfilename
         self.loggingLevel = loggingLevel
         
         logging.basicConfig(filename=self.logfilename,level=self.loggingLevel)
         
-    def log_mse_spike(self,fullTestPoints,newTestPoints,trainingPoints,kernelHyperParams,covarMatrices,centers,numObs,numObsList,fold,mse,squaredErrors,lastSplit):
+    def log_mse_spike(self,fullTestPoints,newTestPoints,trainingPoints,kernelHyperParams,covarMatrices,centers,numObs,numObsList,fold,mse,squaredErrors):
         
         fullTestPoints = fullTestPoints.squeeze(0)
         newTestPoints = newTestPoints.squeeze(0)
         trainingPoints = torch.cat(trainingPoints)
+        print(trainingPoints.shape)
         
         logging.debug('MSE Spike: {0}'.format(mse))
         logging.debug('Num Obs: {0}'.format(numObs))
         logging.debug('Fold: {0}'.format(fold))
-        logging.debug('Last Split: {0}'.format(lastSplit))
         logging.debug('Num Obs per Child:')
         for i in range(len(numObsList)):
             logging.debug('Child {0}: {1} obs'.format(i,numObsList[i]))
@@ -48,9 +48,11 @@ class ExperimentLogger:
         logging.debug('New Test Data:\n{0}'.format(newTestPoints))
         
         logging.debug('Squared Errors: {0}'.format(squaredErrors))
-        
         centers = torch.stack(centers)
-        
+        print('centers shape: {0}'.format(centers.shape))
+        print('training shape: {0}'.format(trainingPoints.shape))
+        print('full test shape: {0}'.format(fullTestPoints.shape))
+        print('new test shape: {0}'.format(newTestPoints.shape))
         self.make_data_plot(trainingPoints,fullTestPoints,newTestPoints,centers)
         
     def make_data_plot(self,trainingPoints,fullTestPoints,newTestPoints,centers):
@@ -67,7 +69,7 @@ class ExperimentLogger:
         if centers.dim()==1:
             centers = centers.unsqueeze(0)
         axes.scatter(centers[:,0].detach(),centers[:,1].detach(),c='green',s=24,zorder=8)
-        plt.savefig('error-fig-{0}.png'.format(int(time.time())))
+        plt.savefig('error-fig-splitting-{0}.png'.format(int(time.time())))
         
 def plot(trainingPoints,testPoints):
     gridDims = 50
