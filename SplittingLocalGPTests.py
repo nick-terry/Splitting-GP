@@ -40,7 +40,7 @@ def evalModel(w_gen,numSamples):
     def makeModel(kernelClass,likelihood,w_gen):
         #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
         model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=2),
-                                                       splittingLimit=5,inheritKernel=True)
+                                                       splittingLimit=500,inheritKernel=True)
         return model
         
     def makeModels(kernelClass,likelihood,w_gen,k):
@@ -66,7 +66,7 @@ def evalModel(w_gen,numSamples):
     print('Done training')
     return t1-t0,model,z,randIndices
 
-numSamplesVals = [2000]
+numSamplesVals = [100]
 runtimes = {}
 for numSamples in numSamplesVals:
     runtimes[numSamples] = evalModel(.5,numSamples)

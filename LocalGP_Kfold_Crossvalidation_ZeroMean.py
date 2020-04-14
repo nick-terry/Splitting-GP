@@ -239,17 +239,19 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     params = kwargs['params']
     kernel = gpytorch.kernels.RBFKernel
     likelihood = gpytorch.likelihoods.GaussianLikelihood
-        
+     
+    
     #Construct a grid of input points
     gridDims = kwargs['gridDims'] if 'gridDims' in kwargs else 100
     x,y = torch.meshgrid([torch.linspace(-1,1,gridDims), torch.linspace(-1,1,gridDims)])
     xyGrid = torch.stack([x,y],dim=2).float()
     
     #Evaluate a function to approximate
+    '''
     z = (5*torch.sin((xyGrid[:,:,0]+.5)**2+(2*xyGrid[:,:,1]+.5)**2)+
          5*torch.sin((xyGrid[:,:,0]-.5)**2+(2*xyGrid[:,:,1]-.5)**2)).reshape((gridDims,gridDims,1))
-    
-    #z = (5*torch.sin(xyGrid[:,:,0]**2+(2*xyGrid[:,:,1])**2)+3*xyGrid[:,:,0]).reshape((gridDims,gridDims,1))
+    '''
+    z = (5*torch.sin(xyGrid[:,:,0]**2+(2*xyGrid[:,:,1])**2)+3*xyGrid[:,:,0]).reshape((gridDims,gridDims,1))
     z += torch.randn(z.shape) * torch.max(z) * .05
     
     #Give z a zero mean

@@ -218,8 +218,10 @@ class LocalGPModel:
         the resulting distribution is also multivariate normal.
         '''
         posteriorMeans = torch.stack(posteriorMeans)
-        #This computation is incorrect
-        weightedAverageMean = torch.dot(minDists,posteriorMeans.squeeze(-1))/torch.sum(minDists)
+        #We need to be careful with this computation. If the covariances are very small, we may end up with a nan value here.
+        minDists = minDists*10**8 #Make a correction to prevent roundoff error from small covariances
+        weights = minDists/torch.sum(minDists)
+        weightedAverageMean = torch.dot(weights,posteriorMeans.squeeze(-1))
         
         return weightedAverageMean
         

@@ -37,6 +37,8 @@ class RegularGPModel:
         self.mean_module = kwargs['mean'] if 'mean' in kwargs else gpytorch.means.ConstantMean
         self.likelihood = likelihoodFn
         
+        self.children = []
+        
         self.fantasyUpdate = fantasyUpdate
         self.inheritKernel = inheritKernel
         

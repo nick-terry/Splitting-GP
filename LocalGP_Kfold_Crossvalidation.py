@@ -16,12 +16,12 @@ import math
 import copy
 import MemoryHelper
 import multiprocessing as mp
+import ExperimentProcessingPool
 import GPLogger
-
-logger = GPLogger.ExperimentLogger('splitting-log.txt')
+import time
 
 def makeExactModel(kernelClass,likelihood,inheritKernel=True,fantasyUpdate=False):
-    return RegularGP.RegularGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel,fantasyUpdate)
+    return RegularGP.RegularGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel,fantasyUpdate,mean=gpytorch.means.ZeroMean)
 
 def makeExactModels(kernelClass,likelihood,k,inheritKernel=True,fantasyUpdate=False):
     models = []
@@ -39,7 +39,7 @@ def makeLocalModel(kernelClass,likelihood,w_gen,**kwargs):
 
 def makeSplittingModel(kernelClass,likelihood,splittingLimit):
     #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
-    model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=2),splittingLimit,inheritKernel=True)
+    model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(),splittingLimit,inheritKernel=True,mean=gpytorch.means.ZeroMean)
     return model
     
 def makeLocalGPModels(kernelClass,likelihood,w_gen,k,**kwargs):
@@ -66,6 +66,7 @@ each of which is a list containing the points witheld in the previous model. Thi
 recomputing the witheld points each iteration.
 '''
 def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,withheldPointsIndices=[]):
+    global logger
     # of folds is equal to # of models given
     models = copy.deepcopy(modelsList)
     k = len(models)
@@ -116,9 +117,11 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,with
         prediction = model.predict(randCoords)
         predictions.append(prediction)
         mse = torch.sum(torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2),dim=list(range(prediction.dim())))/(numSamples/k)
+        print(randPairs.shape)
+        print(numSamples/k)
        
-         #If the MSE is very high, log some key info to debug
-        if(mse>40):
+         #If the MSE is very high or nan, log some key info to debug
+        if(mse>40 or mse!=mse):
             newTestPairs = completeRandIndices[:,newlyWithheldPoints]
             newTestPoints = xyGrid[newTestPairs[0,:],newTestPairs[1,:]].unsqueeze(0)    
             trainingData = []
@@ -150,7 +153,9 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,with
                                  fold=fold,
                                  mse=mse,
                                  squaredErrors=squaredErrors,
-                                 lastSplit=lastSplit)
+                                 lastSplit=lastSplit,
+                                 prediction=prediction.detach().squeeze(0).squeeze(-1),
+                                 groundTruth=z[randPairs[0,:],randPairs[1,:]])
         
         meanSquaredErrors.append(mse.detach())
         elapsedTrainingTimes.append(t1-t0)
@@ -248,21 +253,26 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     (modelType=='splitting' and 'params' in kwargs and 'splittingLimit' in kwargs['params']) or ...
     (modelType=='local' and 'params' in kwargs and 'w_gen' in kwargs['params'])
     
+    global logger
+    logger = GPLogger.ExperimentLogger('{0}-log-{1}.txt'.format(modelType,int(time.time())))
+    
     params = kwargs['params']
     kernel = gpytorch.kernels.RBFKernel
     likelihood = gpytorch.likelihoods.GaussianLikelihood
         
     #Construct a grid of input points
     gridDims = kwargs['gridDims'] if 'gridDims' in kwargs else 100
-    scale = 50
+    scale = 5
     x,y = torch.meshgrid([torch.linspace(-scale,scale,gridDims), torch.linspace(-scale,scale,gridDims)])
     xyGrid = torch.stack([x,y],dim=2).float()
     
     #Evaluate a function to approximate
+    '''
     z = (5*torch.sin((xyGrid[:,:,0]/scale+.5)**2+(2*xyGrid[:,:,1]/scale+.5)**2)+
          5*torch.sin((xyGrid[:,:,0]/scale-.5)**2+(2*xyGrid[:,:,1]/scale-.5)**2)).reshape((gridDims,gridDims,1))
+    '''
+    z = (5*torch.sin((xyGrid[:,:,0]/scale)**2+((2*xyGrid[:,:,1])/scale)**2)+3*xyGrid[:,:,0]/scale).reshape((gridDims,gridDims,1))
     z -= torch.mean(z)
-    #z = (5*torch.sin(xyGrid[:,:,0]**2+(2*xyGrid[:,:,1])**2)+3*xyGrid[:,:,0]).reshape((gridDims,gridDims,1))
     z += torch.randn(z.shape) * torch.max(z) * .05
     
     #Set # of folds for cross-validation

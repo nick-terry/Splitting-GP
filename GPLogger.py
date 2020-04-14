@@ -12,6 +12,7 @@ import logging
 import torch
 import matplotlib.pyplot as plt
 import time
+import numpy as np
 
 torch.set_printoptions(profile="full")
 
@@ -23,7 +24,7 @@ class ExperimentLogger:
         
         logging.basicConfig(filename=self.logfilename,level=self.loggingLevel)
         
-    def log_mse_spike(self,fullTestPoints,newTestPoints,trainingPoints,kernelHyperParams,covarMatrices,centers,numObs,numObsList,fold,mse,squaredErrors,lastSplit):
+    def log_mse_spike(self,fullTestPoints,newTestPoints,trainingPoints,kernelHyperParams,covarMatrices,centers,numObs,numObsList,fold,mse,squaredErrors,lastSplit,prediction,groundTruth):
         
         fullTestPoints = fullTestPoints.squeeze(0)
         newTestPoints = newTestPoints.squeeze(0)
@@ -51,11 +52,13 @@ class ExperimentLogger:
         
         centers = torch.stack(centers)
         
-        self.make_data_plot(trainingPoints,fullTestPoints,newTestPoints,centers)
+        self.make_data_plot(trainingPoints,fullTestPoints,newTestPoints,centers,prediction,groundTruth)
         
-    def make_data_plot(self,trainingPoints,fullTestPoints,newTestPoints,centers):
-        gridDims = 50
-        x,y = torch.meshgrid([torch.linspace(-5,5,gridDims), torch.linspace(-5,5,gridDims)])
+    def make_data_plot(self,trainingPoints,fullTestPoints,newTestPoints,centers,prediction,groundTruth):
+        t = int(time.time())
+        gridDims = 100
+        scale = 5
+        x,y = torch.meshgrid([torch.linspace(-scale,scale,gridDims), torch.linspace(-scale,scale,gridDims)])
         xyGrid = torch.stack([x,y],dim=2).float()
         
         fig,axes = plt.subplots(nrows=1,ncols=1,sharex=True,sharey=True,figsize=(12,5))
@@ -67,7 +70,27 @@ class ExperimentLogger:
         if centers.dim()==1:
             centers = centers.unsqueeze(0)
         axes.scatter(centers[:,0].detach(),centers[:,1].detach(),c='green',s=24,zorder=8)
-        plt.savefig('error-fig-{0}.png'.format(int(time.time())))
+        plt.savefig('error-data-fig-{0}.png'.format(t))
+        
+        #Make a plot showing the prediction and ground truth side-by-side    
+        fig2,axes2 = plt.subplots(nrows=1,ncols=1,sharex=True,sharey=True,figsize=(12,5))
+        numPointsIndexer = range(prediction.shape[-1])
+        print(numPointsIndexer)
+        print(prediction.shape)
+        
+        axes2.scatter(numPointsIndexer, prediction)
+        axes2.scatter(numPointsIndexer, groundTruth)
+        yPairs = zip(prediction, groundTruth)
+        
+        plt.plot((numPointsIndexer,numPointsIndexer),([i for (i,j) in yPairs], [j for (i,j) in yPairs]),c='black')
+            
+        axes2.legend(['Predictions','Ground Truth'])
+        plt.savefig('error-prediction-fig-{0}.png'.format(t))
+        
+        fig.close()
+        fig2.close()
+        
+        
         
 def plot(trainingPoints,testPoints):
     gridDims = 50
