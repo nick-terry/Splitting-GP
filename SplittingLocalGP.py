@@ -87,8 +87,9 @@ class SplittingLocalGPModel(LocalGPModel):
         self.children.append(newChildModel)
         
 class SplittingLocalGPChild(LocalGPChild):
-    def __init__(self, train_x, train_y, parent, inheritKernel=True):
-        super(SplittingLocalGPChild,self).__init__(train_x, train_y, parent, inheritKernel)
+    def __init__(self, train_x, train_y, parent, inheritKernel=True, priorMean=None):
+        kwargs = {'priorMean':priorMean}
+        super(SplittingLocalGPChild,self).__init__(train_x, train_y, parent, inheritKernel, **kwargs)
         
         
     '''
@@ -111,11 +112,12 @@ class SplittingLocalGPChild(LocalGPChild):
         train_x_list = [train_xDet[labels==i] for i in range(k)]
         train_y_list = [train_yDet[labels==i] for i in range(k)]
         
+        #Define the arguments used to construct the new children
         newChildrenArgs=[(train_x,train_y,self.parent,self.parent.inheritKernel) for train_x,train_y in zip(train_x_list,train_y_list)]
         newChildren = []
         
         for args in newChildrenArgs:
-            newChildren.append(SplittingLocalGPChild(*args))
+            newChildren.append(SplittingLocalGPChild(*args,priorMean=self.mean_module))
             
             '''
             for child in newChildren:

@@ -20,10 +20,10 @@ import ExperimentProcessingPool
 import GPLogger
 import time
 
-def makeExactModel(kernelClass,likelihood,inheritKernel=True,fantasyUpdate=False):
-    return RegularGP.RegularGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel,fantasyUpdate,mean=gpytorch.means.ZeroMean)
+def makeExactModel(kernelClass,likelihood,inheritKernel=True,fantasyUpdate=True):
+    return RegularGP.RegularGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel,fantasyUpdate)
 
-def makeExactModels(kernelClass,likelihood,k,inheritKernel=True,fantasyUpdate=False):
+def makeExactModels(kernelClass,likelihood,k,inheritKernel=True,fantasyUpdate=True):
     models = []
     for i in range(k):
         models.append(makeExactModel(kernelClass,likelihood,inheritKernel,fantasyUpdate))
@@ -39,7 +39,7 @@ def makeLocalModel(kernelClass,likelihood,w_gen,**kwargs):
 
 def makeSplittingModel(kernelClass,likelihood,splittingLimit):
     #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
-    model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(),splittingLimit,inheritKernel=True,mean=gpytorch.means.ZeroMean)
+    model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=2),splittingLimit,inheritKernel=True)
     return model
     
 def makeLocalGPModels(kernelClass,likelihood,w_gen,k,**kwargs):
@@ -114,11 +114,13 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,with
         #Predict at withheld points for calculating out of bag MSE
         randPairs = completeRandIndices[:,withheldPointsIndices[index]]
         randCoords = xyGrid[randPairs[0,:],randPairs[1,:]].unsqueeze(0)
-        prediction = model.predict(randCoords)
+        
+        #Need to unpack these since we are returning local predictions now
+        results = model.predict(randCoords)
+        prediction,localPredictions,localWeights,minDists = results[0],results[1],results[2],results[3]
+    
         predictions.append(prediction)
         mse = torch.sum(torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2),dim=list(range(prediction.dim())))/(numSamples/k)
-        print(randPairs.shape)
-        print(numSamples/k)
        
          #If the MSE is very high or nan, log some key info to debug
         if(mse>40 or mse!=mse):
@@ -155,7 +157,10 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,with
                                  squaredErrors=squaredErrors,
                                  lastSplit=lastSplit,
                                  prediction=prediction.detach().squeeze(0).squeeze(-1),
-                                 groundTruth=z[randPairs[0,:],randPairs[1,:]])
+                                 groundTruth=z[randPairs[0,:],randPairs[1,:]],
+                                 localPredictions=localPredictions,
+                                 localWeights=localWeights,
+                                 minDists=minDists)
         
         meanSquaredErrors.append(mse.detach())
         elapsedTrainingTimes.append(t1-t0)
@@ -263,7 +268,7 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     #Construct a grid of input points
     gridDims = kwargs['gridDims'] if 'gridDims' in kwargs else 100
     scale = 5
-    x,y = torch.meshgrid([torch.linspace(-scale,scale,gridDims), torch.linspace(-scale,scale,gridDims)])
+    x,y = torch.meshgrid([torch.linspace(-1,1,gridDims), torch.linspace(-1,1,gridDims)])
     xyGrid = torch.stack([x,y],dim=2).float()
     
     #Evaluate a function to approximate
@@ -271,7 +276,7 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     z = (5*torch.sin((xyGrid[:,:,0]/scale+.5)**2+(2*xyGrid[:,:,1]/scale+.5)**2)+
          5*torch.sin((xyGrid[:,:,0]/scale-.5)**2+(2*xyGrid[:,:,1]/scale-.5)**2)).reshape((gridDims,gridDims,1))
     '''
-    z = (5*torch.sin((xyGrid[:,:,0]/scale)**2+((2*xyGrid[:,:,1])/scale)**2)+3*xyGrid[:,:,0]/scale).reshape((gridDims,gridDims,1))
+    z = (5*torch.sin((xyGrid[:,:,0]*scale)**2+((2*xyGrid[:,:,1])*scale)**2)+3*xyGrid[:,:,0]*scale).reshape((gridDims,gridDims,1))
     z -= torch.mean(z)
     z += torch.randn(z.shape) * torch.max(z) * .05
     

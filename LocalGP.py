@@ -160,13 +160,16 @@ class LocalGPModel:
     The actual prediction is done in the predictAtPoint helper method. If no M is given, use default
     '''
     def predict(self,x):
-        return self.predict(x,self.M)
+        return self.predict(x,self.M,True)
     
     '''
     Make a prediction at the point(s) x. This method is a wrapper which handles the messy case of multidimensional inputs.
     The actual prediction is done in the predictAtPoint helper method
     '''
-    def predict(self,x,M=None):
+    def predict(self,x,M=None,individualPredictions=True):
+        #Update all of the covar modules to the most recent
+        for child in self.children:
+            child.covar_module = self.covar_module
         #If x is a tensor with dimension d1 x d2 x ... x dk x n, iterate over the extra dims and predict at each point
         #Create a 2D list which ranges over all values for each input dimension
         dimRangeList = [list(range(dimSize)) for dimSize in x.shape[:-1]]
@@ -177,16 +180,33 @@ class LocalGPModel:
         #Initialize tensor of zeros to store predictions
         predictions = torch.zeros(size=(*x.shape[:-1],self.outputDim))
         
-        for inputIndices in inputDimIterator:
-            predictions[inputIndices] = self.predictAtPoint(x[inputIndices].unsqueeze(0),M)
+        if individualPredictions:
+            individualList = []
+            weightsList = []
+            minDistsList = []
         
-        return predictions
+        for inputIndices in inputDimIterator:
+            results = self.predictAtPoint(x[inputIndices].unsqueeze(0),M,individualPredictions)
+            
+            if individualPredictions:
+                predictions[inputIndices] = results[0]
+                individualList.append(results[1])
+                weightsList.append(results[2])
+                minDistsList.append(results[3])
+            else:
+                predictions[inputIndices] = results
+        
+        if individualPredictions:
+            return predictions,individualList,weightsList,minDistsList
+        
+        else:
+            return predictions
     '''
     Make a prediction at the point x by finding the M closest child models and
     computing a weighted average of their predictions. By default M is the number
     of child models. If M < number of child models, use all of them.
     '''
-    def predictAtPoint(self,x,M=None):
+    def predictAtPoint(self,x,M=None,individualPredictions=False):
         if M is None:
             M = len(self.children)
         else:
@@ -217,20 +237,45 @@ class LocalGPModel:
         posterior distributions so we have access to variance as well. Presumably
         the resulting distribution is also multivariate normal.
         '''
+        
+        
         posteriorMeans = torch.stack(posteriorMeans)
+        
         #We need to be careful with this computation. If the covariances are very small, we may end up with a nan value here.
-        minDists = minDists*10**8 #Make a correction to prevent roundoff error from small covariances
-        weights = minDists/torch.sum(minDists)
+        nonZeroDists = minDists[minDists>0.0]
+        #Address the case where we are predicting very far away from all models. Take unweighted mean of all predictions
+        if nonZeroDists.shape[-1]==0:
+            weights = torch.tensor([1/M for child in range(M)])
+        else:
+            scaleFactor = torch.min(nonZeroDists)
+            minDists = minDists*scaleFactor #Make a correction to prevent roundoff error from small covariances
+            weights = minDists/torch.sum(minDists)
         weightedAverageMean = torch.dot(weights,posteriorMeans.squeeze(-1))
         
-        return weightedAverageMean
+        '''
+        negLogDists = -torch.log(minDists)
+        weights = 1.0/(negLogDists/torch.sum(negLogDists))
+        weights = weights/torch.sum(weights)
+        weightedAverageMean = torch.dot(weights,posteriorMeans.squeeze(-1))
+        '''
+        
+        if individualPredictions:
+            return weightedAverageMean,posteriorMeans,weights,minDists
+
+        else:
+            return weightedAverageMean
         
 class LocalGPChild(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, parent, inheritKernel=True):
+    def __init__(self, train_x, train_y, parent, inheritKernel=True, **kwargs):
         super(LocalGPChild, self).__init__(train_x, train_y, parent.likelihood())
         
         self.parent = parent
-        self.mean_module = parent.mean_module()
+        
+        if 'priorMean' in kwargs and kwargs['priorMean'] is not None:
+            #If given, take a prior for the mean. Used for splitting models.
+            self.mean_module = copy.deepcopy(kwargs['priorMean'])
+        else:
+            self.mean_module = parent.mean_module()
         
         '''
         If inheritKernel is set to True, then the same Kernel function (including the same hyperparameters)

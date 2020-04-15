@@ -5,7 +5,7 @@ Created on Sun Feb  9 18:05:26 2020
 @author: pnter
 s"""
 
-import LocalGP,SplittingLocalGP
+import RegularGP,LocalGP,SplittingLocalGP
 import torch
 import gpytorch
 import matplotlib.pyplot as plt
@@ -15,21 +15,40 @@ import pandas as pd
 import math
 import copy
 import MemoryHelper
+import multiprocessing as mp
+import ExperimentProcessingPool
+import GPLogger
+import time
 
-def makeModel(kernelClass,likelihood,w_gen):
+def makeExactModel(kernelClass,likelihood,inheritKernel=True,fantasyUpdate=False):
+    return RegularGP.RegularGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel,fantasyUpdate,mean=gpytorch.means.ZeroMean)
+
+def makeExactModels(kernelClass,likelihood,k,inheritKernel=True,fantasyUpdate=False):
+    models = []
+    for i in range(k):
+        models.append(makeExactModel(kernelClass,likelihood,inheritKernel,fantasyUpdate))
+    return models
+
+def makeLocalModel(kernelClass,likelihood,w_gen,**kwargs):
+    if 'maxChildren' in kwargs:
+        model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel=True,w_gen=w_gen,maxChildren=kwargs['maxChildren'])
     #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
-    model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel=False,w_gen=w_gen)
+    else:
+        model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel=True,w_gen=w_gen)
     return model
 
 def makeSplittingModel(kernelClass,likelihood,splittingLimit):
     #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
-    model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=2),splittingLimit,inheritKernel=True)
+    model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(),splittingLimit,inheritKernel=True,mean=gpytorch.means.ZeroMean)
     return model
     
-def makeLocalGPModels(kernelClass,likelihood,w_gen,k):
+def makeLocalGPModels(kernelClass,likelihood,w_gen,k,**kwargs):
     models = []
     for i in range(k):
-        models.append(makeModel(kernelClass, likelihood, w_gen))
+        if 'maxChildren' in kwargs:
+            models.append(makeLocalModel(kernelClass, likelihood, w_gen, maxChildren=kwargs['maxChildren']))
+        else:
+            models.append(makeLocalModel(kernelClass, likelihood, w_gen))
     return models
 
 def makeSplittingLocalGPModels(kernelClass,likelihood,splittingLimit,k):
@@ -38,11 +57,21 @@ def makeSplittingLocalGPModels(kernelClass,likelihood,splittingLimit,k):
         models.append(makeSplittingModel(kernelClass, likelihood, splittingLimit))
     return models
 
-def kFoldCrossValidation(kernelClass,likelihood,modelsList,numSamples,completeRandIndices,xyGrid,z):
+'''
+Run a k-fold cross validation of a model. Time is recorded by computing t1-t0, where t1
+is the end time of the crossvalidation, and t0 is the start time. To avoid recomputing
+the model for earlier data points, we just fit the existing model with 100 more data points,
+then add the additional computation time to the existing record. withheldPointsList contains k entries,
+each of which is a list containing the points witheld in the previous model. This avoids
+recomputing the witheld points each iteration.
+'''
+def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,withheldPointsIndices=[]):
+    global logger
     # of folds is equal to # of models given
     models = copy.deepcopy(modelsList)
     k = len(models)
-    randIndices = completeRandIndices[:,:numSamples]
+    #Take only the new 100 data points to be added
+    randIndices = completeRandIndices[:,numSamples-100:numSamples]
     
     predictions = []
     meanSquaredErrors = []
@@ -50,60 +79,157 @@ def kFoldCrossValidation(kernelClass,likelihood,modelsList,numSamples,completeRa
     memoryUsages = []
     
     for index,model in zip(range(k),models):
-        #Choose numSamples/k data points to withhold. Note k must divide numSamples.
-        sliceStart = int(index*numSamples/k)
-        sliceEnd = int((index+1)*numSamples/k)
-        includedPointsIndices = list(range(numSamples))
+        #Choose 100/k data points to withhold. Note k must divide number of data points.
+        sliceStart = int(index*100/k)
+        sliceEnd = int((index+1)*100/k)
+        #These are the indices of the 100 new points being considered
+        includedPointsIndices = list(range(randIndices.shape[-1]))
+        #These are the points out of 100 which are held out for cross validation
+        newlyWithheldPoints = list(map(lambda i: i + numSamples - 100,includedPointsIndices[sliceStart:sliceEnd]))
         del includedPointsIndices[sliceStart:sliceEnd]
         
         t0 = time.time()
-        
         #Train the model with 1/k th of the data withheld
-        for randPairIndex in includedPointsIndices:
+        for ptno,randPairIndex in zip(range(len(includedPointsIndices)),includedPointsIndices):
             randPair = randIndices[:,randPairIndex]
             x_train = xyGrid[randPair[0],randPair[1]].unsqueeze(0)
             y_train = z[randPair[0],randPair[1]]
+            
+            childCount = len(model.children)
+            
             model.update(x_train,y_train)
-        
+            
+            if(childCount>0 and len(model.children)>childCount):
+                model.lastSplit = numSamples - 100 + ptno + 1
+                print('split: {0}'.format(model.lastSplit))
+                
         t1 = time.time()
-        print('Done training model {0}'.format(index))    
-    
+        print('Done with fold {0}'.format(index))    
+        
+        #Add newly withheld points to get OOB MSE
+        withheldPointsIndices[index] += newlyWithheldPoints
+        
+        #withheldPointsIndices = [index for index in range(numSamples) if index not in includedPointsIndices]
+        
         #Predict at withheld points for calculating out of bag MSE
-        withheldPointsIndices = [index for index in range(numSamples) if index not in includedPointsIndices]
-        randPairs = randIndices[:,withheldPointsIndices]
+        randPairs = completeRandIndices[:,withheldPointsIndices[index]]
         randCoords = xyGrid[randPairs[0,:],randPairs[1,:]].unsqueeze(0)
-        prediction = model.predict(randCoords)
+        
+        #Need to unpack these since we are returning local predictions now
+        results = model.predict(randCoords)
+        prediction,localPredictions,localWeights = results[0],results[1],results[2]
+    
         predictions.append(prediction)
         mse = torch.sum(torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2),dim=list(range(prediction.dim())))/(numSamples/k)
+        print(randPairs.shape)
+        print(numSamples/k)
        
-        meanSquaredErrors.append(mse)
+         #If the MSE is very high or nan, log some key info to debug
+        if(mse>40 or mse!=mse):
+            newTestPairs = completeRandIndices[:,newlyWithheldPoints]
+            newTestPoints = xyGrid[newTestPairs[0,:],newTestPairs[1,:]].unsqueeze(0)    
+            trainingData = []
+            kernelHyperParams = []
+            covarMatrices = []
+            centers = []
+            numObsList = []
+            fold = k
+            lastSplit = model.lastSplit
+            
+            squaredErrors = torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2)
+            
+            for child in model.children:
+                trainingData += child.train_inputs
+                kernelHyperParams.append(child.covar_module.lengthscale)
+                #covarMatrix = child.covar_module(newTestPoints).evaluate()
+                #covarMatrices += covarMatrix
+                centers.append(child.center)
+                numObsList.append(child.train_inputs[0].size())
+                
+            logger.log_mse_spike(fullTestPoints=randCoords,
+                                 newTestPoints=newTestPoints,
+                                 trainingPoints=trainingData,
+                                 kernelHyperParams=kernelHyperParams,
+                                 covarMatrices=covarMatrices,
+                                 centers=centers,
+                                 numObs=numSamples,
+                                 numObsList=numObsList,
+                                 fold=fold,
+                                 mse=mse,
+                                 squaredErrors=squaredErrors,
+                                 lastSplit=lastSplit,
+                                 prediction=prediction.detach().squeeze(0).squeeze(-1),
+                                 groundTruth=z[randPairs[0,:],randPairs[1,:]],
+                                 localPredictions=localPredictions,
+                                 localWeights=localWeights)
+        
+        meanSquaredErrors.append(mse.detach())
         elapsedTrainingTimes.append(t1-t0)
         memoryUsages.append(MemoryHelper.getMemoryUsage())
     
-    del models
-    return {'mse':meanSquaredErrors,'training_time':elapsedTrainingTimes,'memory_usage':memoryUsages}
+    return {'mse':meanSquaredErrors,'training_time':elapsedTrainingTimes,'memory_usage':memoryUsages},models,withheldPointsIndices
 
-def resultsToDF(results,modelType,replicate,params):
+def resultsToDF(results,modelType,params):
     for key in results:
         mse = results[key]['mse']
         mse = list(map(lambda x: float(x.detach()),mse))
-        results[key] = {'mse':mse,'training_time':results[key]['training_time'],'memory_usage':results[key]['memory_usage']}
+        results[key] = {'mse':mse,'training_time':torch.tensor(results[key]['training_time']),
+                        'memory_usage':results[key]['memory_usage'],
+                        'replicate':results[key]['replicate']}
+    
+    paramDict = {'exact':'fantasyUpdate','splitting':'splittingLimit','local':'w_gen'}
     
     df = pd.DataFrame(results).transpose()
     
     df['avg_mse'] = df['mse'].apply(np.mean)
-    df['avg_training_time'] = df['training_time'].apply(np.mean)
+    #Need to cumulatively sum the entries since we only recorded the time to update each model
+    df['training_time'] = df['training_time'].cumsum().tolist()
+    df['avg_training_time'] = df['training_time'].apply(torch.mean)
+    df['avg_training_time'] = df['avg_training_time'].apply(float)
     df['avg_training_time_per_update'] = df['avg_training_time']/df.index
     df['avg_memory_usage'] = df['memory_usage'].apply(np.mean)
     df['model'] = modelType
-    paramName = 'splittingLimit' if modelType == 'splitting' else 'w_gen'
-    df['params'] = '{0}={1}'.format(paramName, .5 if modelType=='exact' else params[paramName])
-    df['replicate'] = replicate
+    
+    paramName = paramDict[modelType]
+    
+    df['params'] = '{0}={1}'.format(paramName,params[paramName])
+    df['replicate'] = results[list(results.keys())[0]]['replicate']
     
     return df
 
+#Run a single replicate of the experiment
+def runReplicate(replicate, seed, gridDims, maxSamples, xyGrid, z):    
+    #Create the models to be cross validated
+    modelsList = getModelsFunction()
+    
+    for model in modelsList:
+        model.lastSplit = -1
+    
+    #Set the seed for the RNG
+    torch.manual_seed(seed)
+    
+    #Sample some random points
+    completeRandIndices = torch.multinomial(torch.ones((2,gridDims)).float(),maxSamples,replacement=True)
+    withheldPointsIndices = [[] for i in range(len(modelsList))]
+    
+    numSamplesTensor = torch.linspace(100,maxSamples,maxSamples//100)
+    results = {}
+    for i in range(numSamplesTensor.shape[-1]):
+        numSamples = int(numSamplesTensor[i])
+        print('numSamples={0}'.format(100*(i+1)))
+        results[numSamples],modelsList,withheldPointsIndices = kFoldCrossValidation(modelsList,
+                                                                 numSamples,
+                                                                 completeRandIndices,
+                                                                 xyGrid,
+                                                                 z,
+                                                                 withheldPointsIndices)
+        results[numSamples]['replicate'] = replicate
+
+    return results
+
 '''
-Create a new experiment for analyzing a GP model.
+Create and run a new experiment for analyzing a GP model. Replicates of the experiment are performed in parallel using the multiprocessing
+module.
 
 Arguments:
 
@@ -133,17 +259,27 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     (modelType=='splitting' and 'params' in kwargs and 'splittingLimit' in kwargs['params']) or ...
     (modelType=='local' and 'params' in kwargs and 'w_gen' in kwargs['params'])
     
+    global logger
+    logger = GPLogger.ExperimentLogger('{0}-log-{1}.txt'.format(modelType,int(time.time())))
+    
     params = kwargs['params']
     kernel = gpytorch.kernels.RBFKernel
     likelihood = gpytorch.likelihoods.GaussianLikelihood
         
     #Construct a grid of input points
     gridDims = kwargs['gridDims'] if 'gridDims' in kwargs else 100
-    x,y = torch.meshgrid([torch.linspace(-1,1,gridDims), torch.linspace(-1,1,gridDims)])
+    scale = 5
+    x,y = torch.meshgrid([torch.linspace(-scale,scale,gridDims), torch.linspace(-scale,scale,gridDims)])
     xyGrid = torch.stack([x,y],dim=2).float()
     
     #Evaluate a function to approximate
-    z = (5*torch.sin(xyGrid[:,:,0]**2+(2*xyGrid[:,:,1])**2)+3*xyGrid[:,:,0]).reshape((gridDims,gridDims,1))
+    '''
+    z = (5*torch.sin((xyGrid[:,:,0]/scale+.5)**2+(2*xyGrid[:,:,1]/scale+.5)**2)+
+         5*torch.sin((xyGrid[:,:,0]/scale-.5)**2+(2*xyGrid[:,:,1]/scale-.5)**2)).reshape((gridDims,gridDims,1))
+    '''
+    z = (5*torch.sin((xyGrid[:,:,0]/scale)**2+((2*xyGrid[:,:,1])/scale)**2)+3*xyGrid[:,:,0]/scale).reshape((gridDims,gridDims,1))
+    z -= torch.mean(z)
+    z += torch.randn(z.shape) * torch.max(z) * .05
     
     #Set # of folds for cross-validation
     k = kwargs['folds'] if 'folds' in kwargs else 5
@@ -156,43 +292,29 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     
     #Generate a seed for each replicate
     torch.manual_seed(6942069)
-    seeds = torch.floor(100000*torch.rand(size=(replications,1)))
+    seeds = list(map(lambda x: int(x),torch.floor(100000*torch.rand(size=(replications,1)))))
+    replicates = range(replications)
     
-    experimentDF = None
+    
+    global getModelsFunction
     
     #Create a function to get new models for each step of the experiment
     if modelType=='exact':
-        def getModelsFunction(): return makeLocalGPModels(kernel, likelihood, 0, k)
+        def getModelsFunction(): return makeExactModels(kernel, likelihood, k, inheritKernel=True, fantasyUpdate=params['fantasyUpdate'])
     elif modelType=='local':
         def getModelsFunction(): return makeLocalGPModels(kernel, likelihood, params['w_gen'], k)
     elif modelType=='splitting':
         def getModelsFunction(): return makeSplittingLocalGPModels(kernel, likelihood, params['splittingLimit'], k)
     
-    for replicate in range(replications):
-        
-        #Create the models to be cross validated
-        modelsList = getModelsFunction()
-        
-        #Set the seed for the RNG
-        torch.manual_seed(int(seeds[replicate]))
-        
-        #Sample some random points
-        completeRandIndices = torch.multinomial(torch.ones((2,gridDims)).float(),maxSamples,replacement=True)
-        
-        numSamplesTensor = torch.linspace(100,maxSamples,maxSamples//100)
-        results = {}
-        for i in range(numSamplesTensor.shape[-1]):
-            print('numSamples={0}'.format(100*(i+1)))
-            results[int(numSamplesTensor[i])] = kFoldCrossValidation(kernel,likelihood,modelsList,
-                                                                     int(numSamplesTensor[i]),
-                                                                     completeRandIndices,
-                                                                     xyGrid,
-                                                                     z)
+    #Create multiprocessing pool for each replicate needed
+    pool = mp.Pool(replications)
     
-        resultsDF = resultsToDF(results,modelType,replicate,params)
-        if experimentDF is None:
-            experimentDF  = resultsDF
-        else:
-            experimentDF = pd.concat([experimentDF,resultsDF])
-        
+    replicateArgsList = [(replicate, seed, gridDims, maxSamples, xyGrid, z) for replicate,seed in zip(replicates,seeds)]
+    results = pool.starmap(runReplicate,replicateArgsList)
+    
+    pool.close()
+    
+    #Convert results dicts into dataframes, then merge
+    experimentDF = pd.concat(list(map(lambda resultDict:resultsToDF(resultDict, modelType, params),results)))
+    
     return experimentDF

@@ -9,12 +9,15 @@ import torch
 import gpytorch
 
 from gpytorch.utils.broadcasting import _mul_broadcast_shape
+from gpytorch.utils.memoize import add_to_cache, is_in_cache
 
 from varBoundFunctions import *
 import numpy as np
 import itertools
 import copy
 from math import inf
+
+from UtilityFunctions import updateInverseCovarWoodbury
 
 '''
 Implements the Local Gaussian Process Regression Model as described by Nguyen-tuong et al.
@@ -35,6 +38,7 @@ class LocalGPModel:
         self.children = []
         self.w_gen = kwargs['w_gen'] if 'w_gen' in kwargs else .5
         self.covar_module = kernel
+        self.mean_module = kwargs['mean'] if 'mean' in kwargs else gpytorch.means.ConstantMean
         self.likelihood = likelihoodFn
         self.inheritKernel = inheritKernel
         
@@ -83,7 +87,11 @@ class LocalGPModel:
                 
                 closestChildModel = self.children[closestChildIndex]
                 #Create a new model which additionally incorporates the pair {x,y}
-                newChildModel = closestChildModel.update(x,y)
+                newChildModel = closestChildModel.update(x,y)            
+                
+                #Set other child to be last updated
+                self.setChildLastUpdated(newChildModel)
+                
                 #Replace the existing model with the new model which incorporates new data
                 self.children[closestChildIndex] = newChildModel
                 del closestChildModel
@@ -106,9 +114,19 @@ class LocalGPModel:
             newChildModel = LocalGPChild(x,y,self,self.inheritKernel)
         else:
             newChildModel = ApproximateGPChild(x,y,self,self.inheritKernel)
+        
+        #Set other children to not be last updated.
+        self.setChildLastUpdated(newChildModel)
+        
         #Add to the list of child models
         self.children.append(newChildModel)
-        
+    
+    def setChildLastUpdated(self,child):
+        for _child in self.children:
+            _child.lastUpdated = False
+        child.lastUpdated = True
+            
+    
     '''
     Return a pytorch tensor of the centers of all child models.
     '''
@@ -142,13 +160,13 @@ class LocalGPModel:
     The actual prediction is done in the predictAtPoint helper method. If no M is given, use default
     '''
     def predict(self,x):
-        return self.predict(x,self.M)
+        return self.predict(x,self.M,True)
     
     '''
     Make a prediction at the point(s) x. This method is a wrapper which handles the messy case of multidimensional inputs.
     The actual prediction is done in the predictAtPoint helper method
     '''
-    def predict(self,x,M=None):
+    def predict(self,x,M=None,individualPredictions=False):
         #If x is a tensor with dimension d1 x d2 x ... x dk x n, iterate over the extra dims and predict at each point
         #Create a 2D list which ranges over all values for each input dimension
         dimRangeList = [list(range(dimSize)) for dimSize in x.shape[:-1]]
@@ -159,16 +177,31 @@ class LocalGPModel:
         #Initialize tensor of zeros to store predictions
         predictions = torch.zeros(size=(*x.shape[:-1],self.outputDim))
         
-        for inputIndices in inputDimIterator:
-            predictions[inputIndices] = self.predictAtPoint(x[inputIndices].unsqueeze(0),M)
+        if individualPredictions:
+            individualList = []
+            weightsList = []
         
-        return predictions
+        for inputIndices in inputDimIterator:
+            results = self.predictAtPoint(x[inputIndices].unsqueeze(0),M,individualPredictions)
+            
+            if individualPredictions:
+                predictions[inputIndices] = results[0]
+                individualList.append(results[1])
+                weightsList.append(results[2])
+            else:
+                predictions[inputIndices] = results
+        
+        if individualPredictions:
+            return predictions,individualList,weightsList
+        
+        else:
+            return predictions
     '''
     Make a prediction at the point x by finding the M closest child models and
     computing a weighted average of their predictions. By default M is the number
     of child models. If M < number of child models, use all of them.
     '''
-    def predictAtPoint(self,x,M=None):
+    def predictAtPoint(self,x,M=None,individualPredictions=False):
         if M is None:
             M = len(self.children)
         else:
@@ -200,17 +233,23 @@ class LocalGPModel:
         the resulting distribution is also multivariate normal.
         '''
         posteriorMeans = torch.stack(posteriorMeans)
-        #This computation is incorrect
-        weightedAverageMean = torch.dot(minDists,posteriorMeans.squeeze(-1))/torch.sum(minDists)
+        #We need to be careful with this computation. If the covariances are very small, we may end up with a nan value here.
+        minDists = minDists*10**8 #Make a correction to prevent roundoff error from small covariances
+        weights = minDists/torch.sum(minDists)
+        weightedAverageMean = torch.dot(weights,posteriorMeans.squeeze(-1))
         
-        return weightedAverageMean
+        if individualPredictions:
+            return weightedAverageMean,posteriorMeans,weights
+
+        else:
+            return weightedAverageMean
         
 class LocalGPChild(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, parent, inheritKernel=True):
-        super(LocalGPChild, self).__init__(train_x, train_y, parent.likelihood(MIN_INFERRED_NOISE_LEVEL = 1e-3))
+        super(LocalGPChild, self).__init__(train_x, train_y, parent.likelihood())
         
         self.parent = parent
-        self.mean_module = gpytorch.means.ConstantMean()
+        self.mean_module = parent.mean_module()
         
         '''
         If inheritKernel is set to True, then the same Kernel function (including the same hyperparameters)
@@ -221,12 +260,14 @@ class LocalGPChild(gpytorch.models.ExactGP):
             self.covar_module = parent.covar_module
         else:
             self.covar_module = copy.deepcopy(parent.covar_module)
+        self.lastUpdated = True
+        
         '''
         Since the data is assumed to arrive as pairs {x,y}, we assume that the 
         initial train_x,train_y are singleton, and set train_x as the intial
         center for the model.
         '''
-        self.center = train_x
+        self.center = torch.mean(train_x,dim=0)
         self.train_x = train_x
         self.train_y = train_y
         
@@ -246,14 +287,79 @@ class LocalGPChild(gpytorch.models.ExactGP):
     Update the child model to incorporate the training pair {x,y}
     '''
     def update(self,x,y):
-        updatedModel = self.get_fantasy_model(inputs=x, targets=y)
+        if self.prediction_strategy is None:
+            self.predict(x)
+        
+        '''
+        If this was the last child to be updated, or inheritKernel=False, we can do a fantasy update
+        without updating the covar cache. Otherwise, we can update the covar_module from the parent
+        '''
+        if not self.lastUpdated and self.parent.inheritKernel:
+                self.covar_module = self.parent.covar_module
+                self.predict(x)
+        
+        '''
+        Sometimes get an error when attempting Cholesky decomposition.
+        In this case, refit a new model.
+        '''
+        try:
+            
+            updatedModel = self.get_fantasy_model(inputs=x, targets=y)
+        
+        except RuntimeError as e:
+            print('Error during Cholesky decomp for fantasy update. Fitting new model...')
+            
+            newInputs = torch.cat([self.train_x,x],dim=0)
+            newTargets = torch.cat([self.train_y,y],dim=0)
+            updatedModel = LocalGPChild(newInputs,newTargets,self.parent,
+                                        inheritKernel=self.parent.inheritKernel)
+        
+        except RuntimeWarning as e:
+            print('Error during Cholesky decomp for fantasy update. Fitting new model...')
+            
+            newInputs = torch.cat([self.train_x,x],dim=0)
+            newTargets = torch.cat([self.train_y,y],dim=0)
+            updatedModel = LocalGPChild(newInputs,newTargets,self.parent,
+                                        inheritKernel=self.parent.inheritKernel)
+        
+        #Update the data properties
+        updatedModel.train_x = updatedModel.train_inputs[0]
+        updatedModel.train_y = updatedModel.train_targets
+        
         #Compute the center of the new model
         updatedModel.center = torch.mean(updatedModel.train_inputs[0],dim=0)
         
+        #Update parent's covar_module
+        self.parent.covar_module = self.covar_module
+        
         #Need to perform a prediction so that get_fantasy_model may be used to update later
         updatedModel.predict(x)
+        
         return updatedModel
     
+    '''
+    Perform a rank-one update of the child model's inverse covariance matrix cache.
+    This is necessary if the model is is NOT the most recently updated child model.
+    '''
+    def updateInvCovarCache(self,update=False):
+        lazy_covar = self.prediction_strategy.lik_train_train_covar
+        if is_in_cache(lazy_covar,"root_inv_decomposition"):
+            if update:
+                #Get the old cached inverse covar matrix 
+                K_0inv = lazy_covar.root_inv_decomposition()
+                #Get the new covar matrix by calling the covar module on the training data
+                K = self.covar_module(self.train_x)
+                #Compute the update
+                Kinv = updateInverseCovarWoodbury(K_0inv, K)
+                #Store updated inverse covar matrix in cache
+                add_to_cache(lazy_covar, "root_inv_decomposition", RootLazyTensor(torch.sqrt(Kinv)))
+            else:
+                #This is a bit dirty, but here we will simply delete the root/root_inv from cache. This forces
+                #GPyTorch to recompute them.
+                
+                lazy_covar._memoize_cache = {}
+                self.prediction_strategy._memoize_cache = {}
+                
     '''
     Setup optimizer and perform initial training
     '''
@@ -285,6 +391,7 @@ class LocalGPChild(gpytorch.models.ExactGP):
         self.likelihood.eval()
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             prediction = self.likelihood(self(x))
+        
         return prediction
     
     '''

@@ -24,7 +24,7 @@ class ExperimentLogger:
         
         logging.basicConfig(filename=self.logfilename,level=self.loggingLevel)
         
-    def log_mse_spike(self,fullTestPoints,newTestPoints,trainingPoints,kernelHyperParams,covarMatrices,centers,numObs,numObsList,fold,mse,squaredErrors,lastSplit,prediction,groundTruth):
+    def log_mse_spike(self,fullTestPoints,newTestPoints,trainingPoints,kernelHyperParams,covarMatrices,centers,numObs,numObsList,fold,mse,squaredErrors,lastSplit,prediction,groundTruth,localPredictions,localWeights,minDists):
         
         fullTestPoints = fullTestPoints.squeeze(0)
         newTestPoints = newTestPoints.squeeze(0)
@@ -49,6 +49,14 @@ class ExperimentLogger:
         logging.debug('New Test Data:\n{0}'.format(newTestPoints))
         
         logging.debug('Squared Errors: {0}'.format(squaredErrors))
+        logging.debug('Local Predictions and Weights:')
+        for i in range(len(localPredictions)):
+            logging.debug('Test Point {0} '.format(i))
+            logging.debug('Local Preds: {1}'.format(i,localPredictions[i]))
+            logging.debug('Local Pred Weights: {1}'.format(i,localWeights[i]))
+            logging.debug('Dists to Children: {1}'.format(i,minDists[i]))
+            logging.debug('Prediction {0}: {1}'.format(i,prediction[i]))
+            logging.debug('Ground Truth {0}: {1}'.format(i,groundTruth[i]))
         
         centers = torch.stack(centers)
         
@@ -75,20 +83,18 @@ class ExperimentLogger:
         #Make a plot showing the prediction and ground truth side-by-side    
         fig2,axes2 = plt.subplots(nrows=1,ncols=1,sharex=True,sharey=True,figsize=(12,5))
         numPointsIndexer = range(prediction.shape[-1])
-        print(numPointsIndexer)
-        print(prediction.shape)
         
         axes2.scatter(numPointsIndexer, prediction)
         axes2.scatter(numPointsIndexer, groundTruth)
         yPairs = zip(prediction, groundTruth)
         
-        plt.plot((numPointsIndexer,numPointsIndexer),([i for (i,j) in yPairs], [j for (i,j) in yPairs]),c='black')
+        #plt.plot((numPointsIndexer,numPointsIndexer),([i for (i,j) in yPairs], [j for (i,j) in yPairs]),c='black')
             
         axes2.legend(['Predictions','Ground Truth'])
         plt.savefig('error-prediction-fig-{0}.png'.format(t))
         
-        fig.close()
-        fig2.close()
+        plt.close(fig)
+        plt.close(fig2)
         
         
         

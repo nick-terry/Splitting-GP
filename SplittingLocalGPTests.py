@@ -40,7 +40,7 @@ def evalModel(w_gen,numSamples):
     def makeModel(kernelClass,likelihood,w_gen):
         #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
         model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=2),
-                                                       splittingLimit=500,inheritKernel=True)
+                                                       splittingLimit=40,inheritKernel=True)
         return model
         
     def makeModels(kernelClass,likelihood,w_gen,k):

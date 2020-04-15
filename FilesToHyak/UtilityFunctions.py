@@ -38,3 +38,27 @@ def pddp(M):
     
     #print('Split labels" {0}'.format(labels))
     return labels
+
+'''
+Update the inverse covariance matrix cache using the Woodbury matrix identity.
+It is assumed that both matrices have the same dimension.
+
+Taking U=I and V=K-K_0, we get:
+    
+K^-1 = K_0^-1 - K_0^-1(I-(K-K_0)K_0^-1)^-1(K-K_0)K_0^-1
+
+which simplifies to:
+    
+K^-1 = 2*K_0^-1 - K_0^-1*K*K_0^-1    
+
+Arguments:
+    
+     K_0inv -- the inverse of the old covariance matrix (torch tensor)
+     K -- the new covariance matrix (torch tensor)
+    
+Returns:
+    
+    Kinv -- the rank one update of the inverse of K
+'''
+def updateInverseCovarWoodbury(K_0inv,K):
+    return 2*K_0inv - K_0inv.matmul(K).matmul(K_0inv)
