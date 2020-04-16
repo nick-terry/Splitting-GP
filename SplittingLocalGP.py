@@ -9,6 +9,7 @@ from UtilityFunctions import pddp
 import numpy as np
 import multiprocessing as mp
 import torch
+import copy
 
 '''
 Workaround for a invalid incompatability warning between numpy 1.8.1 and scipy 0.18.1
@@ -87,8 +88,7 @@ class SplittingLocalGPModel(LocalGPModel):
         self.children.append(newChildModel)
         
 class SplittingLocalGPChild(LocalGPChild):
-    def __init__(self, train_x, train_y, parent, inheritKernel=True, priorMean=None):
-        kwargs = {'priorMean':priorMean}
+    def __init__(self, train_x, train_y, parent, inheritKernel=True, **kwargs):
         super(SplittingLocalGPChild,self).__init__(train_x, train_y, parent, inheritKernel, **kwargs)
         
         
@@ -106,7 +106,9 @@ class SplittingLocalGPChild(LocalGPChild):
         '''
         Split the inputs into clusters using PDDP
         '''
-        labels = pddp(train_xDet)
+        dataMat = torch.cat((train_yDet.unsqueeze(-1),train_xDet),-1)
+        labels = pddp(dataMat)
+        
         
         #Organize the training inputs, targets, centroids for splitting
         train_x_list = [train_xDet[labels==i] for i in range(k)]
@@ -117,7 +119,8 @@ class SplittingLocalGPChild(LocalGPChild):
         newChildren = []
         
         for args in newChildrenArgs:
-            newChildren.append(SplittingLocalGPChild(*args,priorMean=self.mean_module))
+            newChildren.append(SplittingLocalGPChild(*args,priorMean=self.mean_module,priorLik=copy.deepcopy(self.likelihood),
+                                                     split=True))
             
             '''
             for child in newChildren:

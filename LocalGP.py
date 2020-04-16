@@ -143,17 +143,24 @@ class LocalGPModel:
     def getClosestChild(self,x):
         #Compute distances between new input x and existing inputs
         distances = self.getDistanceToCenters(x)
-        #Get the single minimum distance from the tensor
+        #Get the single minimum distance from the tensor (max covar)
         minResults = torch.max(distances,0)
         return minResults[1],minResults[0]
     
     '''
     Compute the distances from the point x to each center
     '''
-    def getDistanceToCenters(self,x):
+    def getDistanceToCenters(self,x,returnPowers=False):
         centers = self.getCenters()
-        distances = self.covar_module(x,centers).evaluate()
-        return distances.squeeze(0)
+        #distances = self.covar_module(x,centers).evaluate()
+        #Switch to double precision for this calculation
+        vec = ((x-centers)/self.covar_module.lengthscale).double()
+        powers = .5*torch.sum(vec**2,dim=1)
+        distances = torch.exp(-powers)
+        if returnPowers:
+            return distances.squeeze(0),powers
+        else:
+            return distances.squeeze(0)
     
     '''
     Make a prediction at the point(s) x. This method is a wrapper which handles the messy case of multidimensional inputs.
@@ -214,7 +221,7 @@ class LocalGPModel:
         
         
         #Compute distances between new input x and existing inputs
-        distances = self.getDistanceToCenters(x)
+        distances,powers = self.getDistanceToCenters(x,True)
         
         #Get the M closest child models. Need to squeeze out extra dims of 1.
         sortResults = torch.sort(distances.squeeze(-1).squeeze(-1),descending=True)
@@ -245,12 +252,12 @@ class LocalGPModel:
         nonZeroDists = minDists[minDists>0.0]
         #Address the case where we are predicting very far away from all models. Take unweighted mean of all predictions
         if nonZeroDists.shape[-1]==0:
-            weights = torch.tensor([1/M for child in range(M)])
+            weights = 1.0/(powers+1.0)
+            weights = weights/torch.sum(weights)
         else:
-            scaleFactor = torch.min(nonZeroDists)
-            minDists = minDists*scaleFactor #Make a correction to prevent roundoff error from small covariances
+            minDists = minDists
             weights = minDists/torch.sum(minDists)
-        weightedAverageMean = torch.dot(weights,posteriorMeans.squeeze(-1))
+        weightedAverageMean = torch.dot(weights,posteriorMeans.squeeze(-1).double()).float()
         
         '''
         negLogDists = -torch.log(minDists)
@@ -267,7 +274,17 @@ class LocalGPModel:
         
 class LocalGPChild(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, parent, inheritKernel=True, **kwargs):
-        super(LocalGPChild, self).__init__(train_x, train_y, parent.likelihood())
+        
+        #Track if the child was created by splitting
+        self.isSplittingChild = True if 'split' in kwargs and kwargs['split'] else False
+        
+        #Handle prior likelihood
+        if 'priorLik' in kwargs and kwargs['priorLik'] is not None:
+            priorLik =  kwargs['priorLik']
+        else:
+            #If no prior is provided, use the default of the parent
+            priorLik = parent.likelihood()
+        super(LocalGPChild, self).__init__(train_x, train_y, priorLik)
         
         self.parent = parent
         
@@ -394,18 +411,20 @@ class LocalGPChild(gpytorch.models.ExactGP):
         self.train()
         self.likelihood.train()
         
-        #Setup optimizer
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.1)
-        mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self)
-        
-        #Perform training iterations
-        for i in range(self.parent.training_iter):
-            self.optimizer.zero_grad()
-            output = self(self.train_x)
-            loss = -mll(output, self.train_y)
-            loss.backward()
-            self.optimizer.step()
-        
+        #We only train on instantiation if the child model is not a result of a split
+        if not self.isSplittingChild:
+            #Setup optimizer
+            self.optimizer = torch.optim.Adam(self.parameters(), lr=0.1)
+            mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self)
+            
+            #Perform training iterations
+            for i in range(self.parent.training_iter):
+                self.optimizer.zero_grad()
+                output = self(self.train_x)
+                loss = -mll(output, self.train_y)
+                loss.backward()
+                self.optimizer.step()
+            
         #Need to perform a prediction so that get_fantasy_model may be used to update later
         self.predict(self.train_x)
     '''

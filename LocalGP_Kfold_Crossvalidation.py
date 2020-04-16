@@ -268,7 +268,7 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     #Construct a grid of input points
     gridDims = kwargs['gridDims'] if 'gridDims' in kwargs else 100
     scale = 5
-    x,y = torch.meshgrid([torch.linspace(-1,1,gridDims), torch.linspace(-1,1,gridDims)])
+    x,y = torch.meshgrid([torch.linspace(-scale,scale,gridDims), torch.linspace(-scale,scale,gridDims)])
     xyGrid = torch.stack([x,y],dim=2).float()
     
     #Evaluate a function to approximate
@@ -276,7 +276,7 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     z = (5*torch.sin((xyGrid[:,:,0]/scale+.5)**2+(2*xyGrid[:,:,1]/scale+.5)**2)+
          5*torch.sin((xyGrid[:,:,0]/scale-.5)**2+(2*xyGrid[:,:,1]/scale-.5)**2)).reshape((gridDims,gridDims,1))
     '''
-    z = (5*torch.sin((xyGrid[:,:,0]*scale)**2+((2*xyGrid[:,:,1])*scale)**2)+3*xyGrid[:,:,0]*scale).reshape((gridDims,gridDims,1))
+    z = (5*torch.sin((xyGrid[:,:,0]/scale)**2+((2*xyGrid[:,:,1])/scale)**2)+3*xyGrid[:,:,0]/scale).reshape((gridDims,gridDims,1))
     z -= torch.mean(z)
     z += torch.randn(z.shape) * torch.max(z) * .05
     
