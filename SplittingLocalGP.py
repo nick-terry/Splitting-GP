@@ -172,7 +172,10 @@ class SplittingLocalGPChild(LocalGPChild):
                 newInputs = torch.cat([self.train_x,x],dim=0)
                 newTargets = torch.cat([self.train_y,y],dim=0)
                 updatedModel = SplittingLocalGPChild(newInputs,newTargets,self.parent,
-                                                     inheritKernel=self.parent.inheritKernel)
+                                                     inheritKernel=self.parent.inheritKernel,
+                                                     priorMean=self.mean_module,
+                                                     priorLik=copy.deepcopy(self.likelihood),
+                                                     split=True)
                 
                 
             #Update the data properties

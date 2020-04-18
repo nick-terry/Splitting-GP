@@ -40,7 +40,7 @@ df = loadFiles()
 
 series = {}
 #models = ['splitting','local','exact']
-models = ['splitting','local']
+models = ['splitting']
 metrics = ['avg_mse','avg_memory_usage','avg_training_time']
 ylabels = ['MSE','Memory Usage (Kb)','Training Time (sec)']
 for metric in metrics:
@@ -61,7 +61,7 @@ for model in models:
         cihw = .96 * stats[1][metric] / np.sqrt(10)
         series[metric]['cihw'].append(cihw)
         
-observations_vals = df['observations'].unique()[:10]
+observations_vals = df['observations'].unique()
 #observations_vals = df['observations'].unique()
 
 for metric,ylabel in zip(metrics,ylabels):
@@ -70,8 +70,8 @@ for metric,ylabel in zip(metrics,ylabels):
     
     for index in range(len(series[metric]['mean'])):
         
-        mean = series[metric]['mean'][index][:10]
-        cihw = series[metric]['cihw'][index][:10]
+        mean = series[metric]['mean'][index]
+        cihw = series[metric]['cihw'][index]
         
         ax.plot(observations_vals,mean,'-o')
         ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.7)

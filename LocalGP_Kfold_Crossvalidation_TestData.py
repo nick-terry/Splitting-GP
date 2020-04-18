@@ -19,10 +19,10 @@ import multiprocessing as mp
 import ExperimentProcessingPool
 import GPLogger
 import time
+import TestData
 
 #Set some gpytorch settings
 gpytorch.settings.fast_computations.covar_root_decomposition = False
-
 
 def makeExactModel(kernelClass,likelihood,inheritKernel=True,fantasyUpdate=True):
     return RegularGP.RegularGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel,fantasyUpdate)
@@ -69,13 +69,13 @@ then add the additional computation time to the existing record. withheldPointsL
 each of which is a list containing the points witheld in the previous model. This avoids
 recomputing the witheld points each iteration.
 '''
-def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,modelType,withheldPointsIndices=[]):
+def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,predictors,response,modelType,withheldPointsIndices=[]):
     global logger
     # of folds is equal to # of models given
     models = copy.deepcopy(modelsList)
     k = len(models)
     #Take only the new 100 data points to be added
-    randIndices = completeRandIndices[:,numSamples-100:numSamples]
+    randIndices = completeRandIndices[numSamples-100:numSamples]
     
     predictions = []
     meanSquaredErrors = []
@@ -94,10 +94,12 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,mode
         
         t0 = time.time()
         #Train the model with 1/k th of the data withheld
-        for ptno,randPairIndex in zip(range(len(includedPointsIndices)),includedPointsIndices):
-            randPair = randIndices[:,randPairIndex]
-            x_train = xyGrid[randPair[0],randPair[1]].unsqueeze(0)
-            y_train = z[randPair[0],randPair[1]]
+        for ptno,i in zip(range(len(includedPointsIndices)),includedPointsIndices):
+            randIndex = randIndices[i]
+            
+            #Make the input 2D or the model think it is just 2 different inputs
+            x_train = predictors[randIndex].unsqueeze(0)
+            y_train = response[randIndex].unsqueeze(0)
             
             childCount = len(model.children)
             
@@ -116,11 +118,11 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,mode
         #withheldPointsIndices = [index for index in range(numSamples) if index not in includedPointsIndices]
         
         #Predict at withheld points for calculating out of bag MSE
-        randPairs = completeRandIndices[:,withheldPointsIndices[index]]
-        randCoords = xyGrid[randPairs[0,:],randPairs[1,:]].unsqueeze(0)
+        randIndicesWithheld = completeRandIndices[withheldPointsIndices[index]]
+        randDataWithheld = predictors[randIndicesWithheld].unsqueeze(0)
         
         #Need to unpack these since we are returning local predictions now
-        results = model.predict(randCoords)
+        results = model.predict(randDataWithheld)
         
         #Exact models do not track additional info about how prediction is computed
         if modelType=='exact':
@@ -129,12 +131,12 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,mode
             prediction,localPredictions,localWeights,minDists = results[0],results[1],results[2],results[3]
     
         predictions.append(prediction)
-        mse = torch.sum(torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2),dim=list(range(prediction.dim())))/(numSamples/k)
+        mse = torch.sum(torch.pow(prediction-response[randIndicesWithheld],2),dim=list(range(prediction.dim())))/(numSamples/k)
        
          #If the MSE is very high or nan, log some key info to debug
-        if(mse>40 or mse!=mse):
-            newTestPairs = completeRandIndices[:,newlyWithheldPoints]
-            newTestPoints = xyGrid[newTestPairs[0,:],newTestPairs[1,:]].unsqueeze(0)    
+        if(mse<0 or mse!=mse):
+            newTestInds = completeRandIndices[newlyWithheldPoints]
+            newTestPoints = predictors[newTestInds].unsqueeze(0)    
             trainingData = []
             kernelHyperParams = []
             covarMatrices = []
@@ -143,7 +145,7 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,mode
             fold = k
             lastSplit = model.lastSplit
             
-            squaredErrors = torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2)
+            squaredErrors = torch.pow(prediction-response[randIndicesWithheld],2)
             
             for child in model.children:
                 trainingData += child.train_inputs
@@ -153,7 +155,7 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,mode
                 centers.append(child.center)
                 numObsList.append(child.train_inputs[0].size())
                 
-            logger.log_mse_spike(fullTestPoints=randCoords,
+            logger.log_mse_spike(fullTestPoints=randDataWithheld,
                                  newTestPoints=newTestPoints,
                                  trainingPoints=trainingData,
                                  kernelHyperParams=kernelHyperParams,
@@ -166,7 +168,7 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,mode
                                  squaredErrors=squaredErrors,
                                  lastSplit=lastSplit,
                                  prediction=prediction.detach().squeeze(0).squeeze(-1),
-                                 groundTruth=z[randPairs[0,:],randPairs[1,:]],
+                                 groundTruth=response[randIndices],
                                  localPredictions=localPredictions,
                                  localWeights=localWeights,
                                  minDists=minDists)
@@ -206,7 +208,8 @@ def resultsToDF(results,modelType,params):
     return df
 
 #Run a single replicate of the experiment
-def runReplicate(replicate, seed, gridDims, maxSamples, xyGrid, z, modelType):    
+def runReplicate(replicate, seed, maxSamples, predictors, response, modelType, getModelsFunction):    
+    
     #Create the models to be cross validated
     modelsList = getModelsFunction()
     
@@ -217,7 +220,7 @@ def runReplicate(replicate, seed, gridDims, maxSamples, xyGrid, z, modelType):
     torch.manual_seed(seed)
     
     #Sample some random points
-    completeRandIndices = torch.multinomial(torch.ones((2,gridDims)).float(),maxSamples,replacement=True)
+    completeRandIndices = torch.multinomial(torch.ones((predictors.shape[0])).float(),maxSamples,replacement=False)
     withheldPointsIndices = [[] for i in range(len(modelsList))]
     
     numSamplesTensor = torch.linspace(100,maxSamples,maxSamples//100)
@@ -228,8 +231,8 @@ def runReplicate(replicate, seed, gridDims, maxSamples, xyGrid, z, modelType):
         results[numSamples],modelsList,withheldPointsIndices = kFoldCrossValidation(modelsList,
                                                                  numSamples,
                                                                  completeRandIndices,
-                                                                 xyGrid,
-                                                                 z,
+                                                                 predictors,
+                                                                 response,
                                                                  modelType,
                                                                  withheldPointsIndices
                                                                  )
@@ -252,10 +255,6 @@ Keyword Arguments:
         
     folds: # of folds in the crossvalidation. Must be an int greater than 1. Don't make this too big. Default is 5.
         
-    gridDims: # of grid points used for evaluating the response function of the experiment, in one dimension.
-        Note that we need gridDims**n>=maxSamples. In practice, we want gridDims**n>2*maxSamples for the
-        experiment to give useful results. By default, this will be 100.
-        
     maxSamples: Maximum number of samples to run the model against. Should be a multiple of 100. In the experiment,
         we will run the model with numbers of samples ranging from 100 to maxSamples in increments of 100.
         
@@ -276,21 +275,9 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     params = kwargs['params']
     kernel = gpytorch.kernels.RBFKernel
     likelihood = gpytorch.likelihoods.GaussianLikelihood
-        
-    #Construct a grid of input points
-    gridDims = kwargs['gridDims'] if 'gridDims' in kwargs else 100
-    scale = 5
-    x,y = torch.meshgrid([torch.linspace(-scale,scale,gridDims), torch.linspace(-scale,scale,gridDims)])
-    xyGrid = torch.stack([x,y],dim=2).float()
     
-    #Evaluate a function to approximate
-    '''
-    z = (5*torch.sin((xyGrid[:,:,0]/scale+.5)**2+(2*xyGrid[:,:,1]/scale+.5)**2)+
-         5*torch.sin((xyGrid[:,:,0]/scale-.5)**2+(2*xyGrid[:,:,1]/scale-.5)**2)).reshape((gridDims,gridDims,1))
-    '''
-    z = (5*torch.sin((xyGrid[:,:,0]/scale)**2+((2*xyGrid[:,:,1])/scale)**2)+3*xyGrid[:,:,0]/scale).reshape((gridDims,gridDims,1))
-    z -= torch.mean(z)
-    z += torch.randn(z.shape) * torch.max(z) * .05
+    #Load icethick dataset
+    predictor,response = TestData.icethick()
     
     #Set # of folds for cross-validation
     k = kwargs['folds'] if 'folds' in kwargs else 5
@@ -317,13 +304,20 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     elif modelType=='splitting':
         def getModelsFunction(): return makeSplittingLocalGPModels(kernel, likelihood, params['splittingLimit'], k)
     
+    #Multiprocessing hangs for some reason... use loop for now
+    '''
     #Create multiprocessing pool for each replicate needed
     pool = mp.Pool(replications)
+    '''
+    replicateArgsList = [(replicate, seed, maxSamples, predictor, response, modelType, getModelsFunction) for replicate,seed in zip(replicates,seeds)]
     
-    replicateArgsList = [(replicate, seed, gridDims, maxSamples, xyGrid, z, modelType) for replicate,seed in zip(replicates,seeds)]
+    '''
     results = pool.starmap(runReplicate,replicateArgsList)
     
     pool.close()
+    '''
+    
+    results = [runReplicate(*args) for args in replicateArgsList]
     
     #Convert results dicts into dataframes, then merge
     experimentDF = pd.concat(list(map(lambda resultDict:resultsToDF(resultDict, modelType, params),results)))

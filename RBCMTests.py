@@ -5,8 +5,7 @@ Created on Sun Feb  9 18:05:26 2020
 @author: pnter
 es"""
 import time
-import LocalGP
-import SplittingLocalGP
+import RBCM
 import torch
 import gpytorch
 import matplotlib.pyplot as plt
@@ -14,14 +13,14 @@ import numpy as np
 from itertools import product
 from math import inf
 
-gpytorch.settings.fast_computations.covar_root_decomposition = False
+gpytorch.settings.fast_computations.covar_root_decomposition = True
 
 #Construct a grid of input points
 gridDims = 50
 x,y = torch.meshgrid([torch.linspace(-1,1,gridDims), torch.linspace(-1,1,gridDims)])
 xyGrid = torch.stack([x,y],dim=2).float()
 
-def evalModel(w_gen,numSamples):
+def evalModel(numSamples):
     #Set RNG seed
     torch.manual_seed(42069)
     
@@ -37,21 +36,19 @@ def evalModel(w_gen,numSamples):
     k = 5
     kernel = gpytorch.kernels.RBFKernel
     likelihood = gpytorch.likelihoods.GaussianLikelihood
-    w_gen = .5
     
-    def makeModel(kernelClass,likelihood,w_gen):
+    def makeModel(kernelClass,likelihood):
         #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
-        model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=2),
-                                                       splittingLimit=40,inheritKernel=True)
+        model = RBCM.RobustBayesCommitteeMachine(likelihood,kernelClass(ard_num_dims=2))
         return model
         
-    def makeModels(kernelClass,likelihood,w_gen,k):
+    def makeModels(kernelClass,likelihood,k):
         models = []
         for i in range(k):
-            models.append(makeModel(kernelClass, likelihood, w_gen))
+            models.append(makeModel(kernelClass, likelihood))
         return models
     
-    model = makeModel(kernel,likelihood,w_gen=w_gen)
+    model = makeModel(kernel,likelihood)
     t0 = time.time()
     j = 0
     for randPairIndex in range(numSamples):
@@ -60,9 +57,11 @@ def evalModel(w_gen,numSamples):
         y_train = z[randPair[0],randPair[1]]
         model.update(x_train,y_train)
         print('observation: {0}'.format(j))
-        childrenNumData = list(map(lambda child:child.train_x.shape[0],model.children))
-        for childNum,childNumData in zip(range(len(childrenNumData)),childrenNumData):
-            print('data in child model {0}: {1}'.format(childNum,childNumData)) 
+        '''
+        for child in model.children:
+            print('child numdata: {0}'.format(child.train_x.shape))
+        '''
+        
         j += 1
     t1 = time.time()
     print('Done training')
@@ -71,8 +70,13 @@ def evalModel(w_gen,numSamples):
 numSamplesVals = [100]
 runtimes = {}
 for numSamples in numSamplesVals:
-    runtimes[numSamples] = evalModel(.5,numSamples)
+    runtimes[numSamples] = evalModel(numSamples)
+    
+model = runtimes[100][1]
 
+prediction = model.predict(xyGrid)
+z = runtimes[numSamples][2]
+'''
 numSamples = numSamplesVals[0]
 model = runtimes[numSamples][1]
 z = runtimes[numSamples][2]
@@ -80,7 +84,7 @@ randIndices = runtimes[numSamples][3]
 
 #Predict over the whole grid for plotting
 prediction = model.predict(xyGrid)
-
+'''
 #Define a common scale for color mapping for contour plots
 maxAbsVal = torch.max(torch.abs(z))
 levels = np.linspace(-maxAbsVal,maxAbsVal,30)
@@ -92,8 +96,11 @@ contours = axes[0].contourf(xyGrid[:,:,0].detach(),xyGrid[:,:,1].detach(),z.deta
 
 #Plot GP regression approximation
 axes[1].contourf(xyGrid[:,:,0].detach(),xyGrid[:,:,1].detach(),prediction.detach().squeeze(2),levels)
+'''
 #Show the points which were sampled to construct the GP model
 sampledPoints  = xyGrid[randIndices[0,:],randIndices[1,:]]
 axes[1].scatter(sampledPoints[:,0].detach(),sampledPoints[:,1].detach(),c='orange',s=8,edgecolors='black')
 childrenCenters = model.getCenters().squeeze(1)
 axes[1].scatter(childrenCenters[:,0].detach(),childrenCenters[:,1].detach(),c='orange',s=24,edgecolors='white')
+
+'''

@@ -486,7 +486,7 @@ class LocalGPChild(gpytorch.models.ExactGP):
             k_0 = self.covar_module(zero_tensor,zero_tensor).evaluate()
             return k_0 - torch.sum(outerSumTerms) - k_x_xn * self.kinvInnerSums[-1]
         
-        if kwargs['method'] is 'eigen':
+        if kwargs['method'] == 'eigen':
             #Compute kernel evaluated at d=0
             zero_tensor = torch.zeros([1,1])
             k_0 = self.covar_module(zero_tensor,zero_tensor).evaluate()
