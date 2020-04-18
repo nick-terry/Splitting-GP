@@ -67,29 +67,20 @@ class RobustBayesCommitteeMachine():
         else: 
             '''
             #We assume that we originally assigned the data via uniform randomness acros the children. Now choose the child with the smallest data set.
-            childToUpdateIndex = self.childrenNumData.index(min(self.childrenNumData))
             '''
             childToUpdateIndex = self.nextChildToUpdate
             
             
             childToUpdate = self.children[childToUpdateIndex]
             
-            t0 = time.time()
-            newChildModel = childToUpdate.update(x,y)
-            
-            self.children[childToUpdateIndex] = newChildModel
-            t1 = time.time()
-            print(t1-t0)
-            
+            childToUpdate.update(x,y)
             
             self.childrenNumData[childToUpdateIndex] += 1
             
-            self.setChildLastUpdated(newChildModel)
+            self.setChildLastUpdated(childToUpdate)
             
             #Compute next child to update mod max # children
             self.nextChildToUpdate = self.nextChildToUpdate + 1 if self.nextChildToUpdate < self.numChildren-1 else 0
-            
-            del childToUpdate
     
     def setChildLastUpdated(self,child):
         for _child in self.children:
@@ -112,7 +103,7 @@ class RobustBayesCommitteeMachine():
         inputDimIterator = itertools.product(*dimRangeList)
         
         #Initialize tensor of zeros to store predictions
-        predictions = torch.zeros(size=(x.shape[:-1],self.outputDim))
+        predictions = torch.zeros(size=(*x.shape[:-1],self.outputDim))
         
         if individualPredictions:
             individualList = []
@@ -150,14 +141,16 @@ class RobustBayesCommitteeMachine():
         for i in range(len(self.children)):
             
             child = self.children[i]
-            childPredictions[i],childVars[i],childBetas[i] = child.predict(x)
+            childResults = child.predict(x)
+            #Switch to double precision for this critical computation
+            childPredictions[i],childVars[i],childBetas[i] = [results.double() for results in childResults]
             
             
         #Compute the committee's predictive var
-        predVar = 1.0/(torch.sum(childBetas*childVars) - (1-torch.sum(childBetas))*self.varStarStar)
+        predVar = 1.0/(torch.sum(childBetas/childVars) - (1-torch.sum(childBetas))/self.varStarStar)
         
         #Compute the committee's predictive mean
-        predMean = torch.sum(childPredictions*childVars*childBetas)*predVar
+        predMean = torch.sum(childPredictions/childVars*childBetas)*predVar
         
         if individualPredictions:
             return predMean,childPredictions,childBetas

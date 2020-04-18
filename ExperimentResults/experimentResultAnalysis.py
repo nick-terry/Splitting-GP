@@ -51,7 +51,7 @@ for metric in metrics:
         
 for model in models:
     #toyFnNoiseData = df.loc[(df['model']==model)&(df['response_function']=='bimodal')&(df['noise']==1)&(df['params']=='fantasyUpdate=False')]
-    toyFnNoiseData = df.loc[(df['model']==model)&(df['response_function']=='toyfn')&(df['noise']==1)&(df['mean']=='constant')]
+    toyFnNoiseData = df.loc[(df['model']==model)&(df['response_function']=='testdata')&(df['noise']==0)&(df['mean']=='constant')]
     stats = getSummaryStats(toyFnNoiseData)
     for metric in metrics:
         #series[metric].append(stats[0][metric][:25])

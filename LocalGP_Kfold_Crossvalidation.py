@@ -5,7 +5,7 @@ Created on Sun Feb  9 18:05:26 2020
 @author: pnter
 s"""
 
-import RegularGP,LocalGP,SplittingLocalGP
+import RegularGP,LocalGP,SplittingLocalGP,RBCM
 import torch
 import gpytorch
 import matplotlib.pyplot as plt
@@ -59,6 +59,17 @@ def makeSplittingLocalGPModels(kernelClass,likelihood,splittingLimit,k):
     models = []
     for i in range(k):
         models.append(makeSplittingModel(kernelClass, likelihood, splittingLimit))
+    return models
+
+def makeRBCMModel(kernelClass,likelihood,numChildren):
+    #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
+    model = RBCM.RobustBayesCommitteeMachine(likelihood,kernelClass(ard_num_dims=2),numChildren=numChildren)
+    return model
+
+def makeRBCMModels(kernelClass,likelihood,numChildren,k):
+    models = []
+    for i in range(k):
+        models.append(makeRBCMModel(kernelClass, likelihood, numChildren))
     return models
 
 '''
@@ -123,7 +134,7 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,mode
         results = model.predict(randCoords)
         
         #Exact models do not track additional info about how prediction is computed
-        if modelType=='exact':
+        if modelType in {'exact','rbcm'}:
             prediction = results
         else:
             prediction,localPredictions,localWeights,minDists = results[0],results[1],results[2],results[3]
@@ -132,7 +143,7 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,mode
         mse = torch.sum(torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2),dim=list(range(prediction.dim())))/(numSamples/k)
        
          #If the MSE is very high or nan, log some key info to debug
-        if(mse>40 or mse!=mse):
+        if(mse!=mse):
             newTestPairs = completeRandIndices[:,newlyWithheldPoints]
             newTestPoints = xyGrid[newTestPairs[0,:],newTestPairs[1,:]].unsqueeze(0)    
             trainingData = []
@@ -185,7 +196,7 @@ def resultsToDF(results,modelType,params):
                         'memory_usage':results[key]['memory_usage'],
                         'replicate':results[key]['replicate']}
     
-    paramDict = {'exact':'fantasyUpdate','splitting':'splittingLimit','local':'w_gen'}
+    paramDict = {'exact':'fantasyUpdate','splitting':'splittingLimit','local':'w_gen','rbcm':'numChildren'}
     
     df = pd.DataFrame(results).transpose()
     
@@ -267,7 +278,8 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     #Verify that the modelType/params combination is valid
     assert (modelType=='exact' and 'params' not in kwargs) or ...
     (modelType=='splitting' and 'params' in kwargs and 'splittingLimit' in kwargs['params']) or ...
-    (modelType=='local' and 'params' in kwargs and 'w_gen' in kwargs['params'])
+    (modelType=='local' and 'params' in kwargs and 'w_gen' in kwargs['params']) or ...
+    (modelType=='rbcm' and 'params' in kwargs and 'numChildren' in kwargs['params'])
     
     global logger
     
@@ -316,6 +328,8 @@ def runCrossvalidationExperiment(modelType,**kwargs):
         def getModelsFunction(): return makeLocalGPModels(kernel, likelihood, params['w_gen'], k)
     elif modelType=='splitting':
         def getModelsFunction(): return makeSplittingLocalGPModels(kernel, likelihood, params['splittingLimit'], k)
+    elif modelType=='rbcm':
+        def getModelsFunction(): return makeRBCMModels(kernel, likelihood, params['numChildren'], k)
     
     #Create multiprocessing pool for each replicate needed
     pool = mp.Pool(replications)

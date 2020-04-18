@@ -42,10 +42,12 @@ class CommitteeMember(gpytorch.models.ExactGP):
     #Get a prediction. Returns predictive mean, variance, and beta factor.
     #To save some time, only compute beta etc if needed
     def predict(self,x,needPred=True):
+        if not self.trained:
+            self.initTraining()
         #Switch to eval/prediction mode
         self.eval()
         self.likelihood.eval()
-        with torch.no_grad(), gpytorch.settings.fast_pred_var():
+        with torch.no_grad():
             posteriorDist = self.likelihood(self(x))
         
         if needPred:
@@ -74,7 +76,9 @@ class CommitteeMember(gpytorch.models.ExactGP):
             self.optimizer.step()
             
         #Need to perform a prediction so that get_fantasy_model may be used to update later
-        self.predict(self.train_x,False)
+        self.trained = True
+        self.predict(self.train_x[0,:].unsqueeze(0),False)
+        
         
         
     '''
@@ -85,11 +89,21 @@ class CommitteeMember(gpytorch.models.ExactGP):
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
     
+    '''
+    Do a simple update of the training data with, training occuring only when explicitly called
+    '''
+    def update(self,x,y):
+        self.train_x = torch.cat([self.train_x,x],dim=0)
+        self.train_y = torch.cat([self.train_y,y],dim=0)
+        
+        self.train_inputs = (self.train_x,)
+        self.train_targets = self.train_y
+        self.trained = False
     
     '''
     Update the child model to incorporate the training pair {x,y}
     '''
-    def update(self,x,y):
+    def fantUpdate(self,x,y):
         if self.prediction_strategy is None:
             self.predict(x,False)
         

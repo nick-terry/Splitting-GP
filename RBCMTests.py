@@ -17,7 +17,8 @@ gpytorch.settings.fast_computations.covar_root_decomposition = True
 
 #Construct a grid of input points
 gridDims = 50
-x,y = torch.meshgrid([torch.linspace(-1,1,gridDims), torch.linspace(-1,1,gridDims)])
+scale = 2.5
+x,y = torch.meshgrid([torch.linspace(-scale,scale,gridDims), torch.linspace(-scale,scale,gridDims)])
 xyGrid = torch.stack([x,y],dim=2).float()
 
 def evalModel(numSamples):
@@ -25,7 +26,7 @@ def evalModel(numSamples):
     torch.manual_seed(42069)
     
     #Evaluate a function to approximate, with added noise
-    z = (torch.sin(xyGrid[:,:,0]**2+(2*xyGrid[:,:,1])**2)).reshape((gridDims,gridDims,1))
+    z = ((4*torch.sin(xyGrid[:,:,0]/scale)**2+(2*xyGrid[:,:,1]/scale)**2)).reshape((gridDims,gridDims,1))
     z += torch.randn(z.shape) * .05
     
     #Sample some random points, then fit a LocalGP model to the points
@@ -39,7 +40,7 @@ def evalModel(numSamples):
     
     def makeModel(kernelClass,likelihood):
         #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
-        model = RBCM.RobustBayesCommitteeMachine(likelihood,kernelClass(ard_num_dims=2))
+        model = RBCM.RobustBayesCommitteeMachine(likelihood,kernelClass(ard_num_dims=2),numChildren=5)
         return model
         
     def makeModels(kernelClass,likelihood,k):
@@ -67,12 +68,12 @@ def evalModel(numSamples):
     print('Done training')
     return t1-t0,model,z,randIndices
 
-numSamplesVals = [100]
+numSamplesVals = [1000]
 runtimes = {}
 for numSamples in numSamplesVals:
     runtimes[numSamples] = evalModel(numSamples)
     
-model = runtimes[100][1]
+model = runtimes[1000][1]
 
 prediction = model.predict(xyGrid)
 z = runtimes[numSamples][2]
@@ -80,8 +81,9 @@ z = runtimes[numSamples][2]
 numSamples = numSamplesVals[0]
 model = runtimes[numSamples][1]
 z = runtimes[numSamples][2]
+'''
 randIndices = runtimes[numSamples][3]
-
+'''
 #Predict over the whole grid for plotting
 prediction = model.predict(xyGrid)
 '''
@@ -96,10 +98,11 @@ contours = axes[0].contourf(xyGrid[:,:,0].detach(),xyGrid[:,:,1].detach(),z.deta
 
 #Plot GP regression approximation
 axes[1].contourf(xyGrid[:,:,0].detach(),xyGrid[:,:,1].detach(),prediction.detach().squeeze(2),levels)
-'''
+
 #Show the points which were sampled to construct the GP model
 sampledPoints  = xyGrid[randIndices[0,:],randIndices[1,:]]
 axes[1].scatter(sampledPoints[:,0].detach(),sampledPoints[:,1].detach(),c='orange',s=8,edgecolors='black')
+'''
 childrenCenters = model.getCenters().squeeze(1)
 axes[1].scatter(childrenCenters[:,0].detach(),childrenCenters[:,1].detach(),c='orange',s=24,edgecolors='white')
 

@@ -8,16 +8,21 @@ Created on Fri Apr 17 17:32:42 2020
 import torch
 import pandas as pd
 
-def icethick():
+def icethick(full=False):
     df = pd.read_csv('ICETHK.csv')
-    df = df[['Longitude W','Latitude S','Thickness (m)']]
+    if full:
+        return df
     
-    #Transform into PyTorch tensors of predictors and responses
-    x = torch.tensor(df[['Longitude W','Latitude S']].to_numpy())
-    y = torch.tensor(df['Thickness (m)'].to_numpy())
-    
-    #Get every 10th element for now to test on smaller scale
-    x = x[::5,:].float()
-    y = y[::5].float()
-    
-    return x,y
+    else:
+        df = df[['Longitude W','Latitude S','Thickness (m)']]
+        
+        #Transform into PyTorch tensors of predictors and responses
+        x = torch.tensor(df[['Longitude W','Latitude S']].to_numpy())
+        y = torch.tensor(df['Thickness (m)'].to_numpy())
+        
+        #Get every 3rd element for now to test on smaller scale
+        x = x[::3,:].float()
+        y = y[::3].float()
+        y = y/torch.max(y) #Scale down for regression
+        
+        return x,y

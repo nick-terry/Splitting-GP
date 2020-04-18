@@ -40,6 +40,12 @@ def pddp(M):
     return labels
 
 '''
+Compute the Bayesian Information criterion for the given Likelihood and number of samples
+'''
+def BIC(L,n):
+    return torch.log(n)-2*torch.log(L)
+
+'''
 Update the inverse covariance matrix cache using the Woodbury matrix identity.
 It is assumed that both matrices have the same dimension.
 
