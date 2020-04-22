@@ -147,7 +147,7 @@ class RobustBayesCommitteeMachine():
             
             
         #Compute the committee's predictive var
-        predVar = 1.0/(torch.sum(childBetas/childVars) - (1-torch.sum(childBetas))/self.varStarStar)
+        predVar = 1.0/(torch.sum(childBetas/childVars) + (1-torch.sum(childBetas))/self.varStarStar)
         
         #Compute the committee's predictive mean
         predMean = torch.sum(childPredictions/childVars*childBetas)*predVar

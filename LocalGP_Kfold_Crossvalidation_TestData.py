@@ -22,7 +22,7 @@ import time
 import TestData
 
 #Set some gpytorch settings
-gpytorch.settings.fast_computations.covar_root_decomposition = False
+gpytorch.settings.fast_computations.covar_root_decomposition.on()
 
 def makeExactModel(kernelClass,likelihood,inheritKernel=True,fantasyUpdate=True):
     return RegularGP.RegularGPModel(likelihood,kernelClass(ard_num_dims=2),inheritKernel,fantasyUpdate)
@@ -277,7 +277,7 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     likelihood = gpytorch.likelihoods.GaussianLikelihood
     
     #Load icethick dataset
-    predictor,response = TestData.icethick()
+    predictor,response = TestData.icethick(scale=False)
     
     #Set # of folds for cross-validation
     k = kwargs['folds'] if 'folds' in kwargs else 5

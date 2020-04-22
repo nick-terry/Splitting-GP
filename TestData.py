@@ -7,8 +7,13 @@ Created on Fri Apr 17 17:32:42 2020
 
 import torch
 import pandas as pd
+import UtilityFunctions
+from pathlib import Path
+import os.path
 
-def icethick(full=False):
+path = Path().absolute()
+
+def icethick(full=False,scale=True,project=False):
     df = pd.read_csv('ICETHK.csv')
     if full:
         return df
@@ -23,6 +28,28 @@ def icethick(full=False):
         #Get every 3rd element for now to test on smaller scale
         x = x[::3,:].float()
         y = y[::3].float()
-        y = y/torch.max(y) #Scale down for regression
+        
+        if project:
+            #center = torch.mean(x,dim=0)
+            southPole = torch.tensor([-90,0]).float()
+            projectFn = UtilityFunctions.getGnomomic(southPole)
+            x = projectFn(x)
+            
+        if scale:
+            x[:,0] = x[:,0]/torch.max(torch.abs(x[:,0]))
+            x[:,1] = x[:,1]/torch.max(torch.abs(x[:,1]))
+            y = y/torch.max(y) #Scale down for regression
         
         return x,y
+
+def kin40():
+    trainInputs = torch.tensor(pd.read_fwf('kin40k_train_inputs.txt',header=None).to_numpy()).float()
+    testInputs = torch.tensor(pd.read_fwf('kin40k_test_inputs.txt',header=None).to_numpy()).float()
+    trainLabels = torch.tensor(pd.read_fwf('kin40k_train_labels.txt',header=None).to_numpy()).squeeze().float()
+    testLabels = torch.tensor(pd.read_fwf('kin40k_test_labels.txt',header=None).to_numpy()).squeeze().float()
+    
+
+    
+    return trainInputs,trainLabels,testInputs,testLabels
+
+kin40()

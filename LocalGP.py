@@ -132,7 +132,7 @@ class LocalGPModel:
     '''
     def getCenters(self):
         #Get the center of each child model
-        centersList = list(map(lambda x:x.center.reshape((2)),self.children))
+        centersList = list(map(lambda x:x.center.reshape((x.center.shape[0])),self.children))
         #Return the centers after stacking in new dimension
         return torch.stack(centersList,dim=0)
     
@@ -152,11 +152,16 @@ class LocalGPModel:
     '''
     def getDistanceToCenters(self,x,returnPowers=False):
         centers = self.getCenters()
-        #distances = self.covar_module(x,centers).evaluate()
+        x,centers = x.double(),centers.double()
+        distances = self.covar_module(x,centers).evaluate()
+        powers = torch.zeros(distances.shape)
         #Switch to double precision for this calculation
+        '''
         vec = ((x-centers)/self.covar_module.lengthscale).double()
         powers = .5*torch.sum(vec**2,dim=1)
         distances = torch.exp(-powers)
+        '''
+        
         if returnPowers:
             return distances.squeeze(0),powers
         else:
@@ -166,8 +171,8 @@ class LocalGPModel:
     Make a prediction at the point(s) x. This method is a wrapper which handles the messy case of multidimensional inputs.
     The actual prediction is done in the predictAtPoint helper method. If no M is given, use default
     '''
-    def predict(self,x):
-        return self.predict(x,self.M,True)
+    def predict(self,x,individualPredictions=False):
+        return self.predict(x,self.M,individualPredictions)
     
     '''
     Make a prediction at the point(s) x. This method is a wrapper which handles the messy case of multidimensional inputs.
@@ -193,6 +198,7 @@ class LocalGPModel:
             minDistsList = []
         
         for inputIndices in inputDimIterator:
+            print(inputIndices)
             results = self.predictAtPoint(x[inputIndices].unsqueeze(0),M,individualPredictions)
             
             if individualPredictions:
@@ -284,6 +290,10 @@ class LocalGPChild(gpytorch.models.ExactGP):
         else:
             #If no prior is provided, use the default of the parent
             priorLik = parent.likelihood()
+            
+            #In this case, we reset the isSplittingChild flag to false in order for the new likelihood to be trained
+            self.isSplittingChild = False
+            
         super(LocalGPChild, self).__init__(train_x, train_y, priorLik)
         
         self.parent = parent
@@ -422,7 +432,13 @@ class LocalGPChild(gpytorch.models.ExactGP):
                 self.optimizer.zero_grad()
                 output = self(self.train_x)
                 loss = -mll(output, self.train_y)
-                loss.backward()
+                try:
+                    loss.backward()
+                except:
+                    print(loss)
+                    print(self.train_y)
+
+                    
                 self.optimizer.step()
             
         #Need to perform a prediction so that get_fantasy_model may be used to update later

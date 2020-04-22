@@ -24,10 +24,11 @@ data points grows. This preserves computational tractability as the model grows,
 while reducing prediction MSE as compared to naive generation of new child models.
 '''
 class SplittingLocalGPModel(LocalGPModel):
-    def __init__(self, likelihoodFn, kernel, splittingLimit, inheritKernel=True, **kwargs):
+    def __init__(self, likelihoodFn, kernel, splittingLimit, inheritKernel=True, inheritLikelihood=True, **kwargs):
         super(SplittingLocalGPModel,self).__init__(likelihoodFn, kernel, **kwargs)
         
         self.splittingLimit = splittingLimit
+        self.inheritLikelihood = inheritLikelihood
 
     '''
     TODO: override this method to allow for multiple new child models in the
@@ -118,14 +119,15 @@ class SplittingLocalGPChild(LocalGPChild):
         newChildrenArgs=[(train_x,train_y,self.parent,self.parent.inheritKernel) for train_x,train_y in zip(train_x_list,train_y_list)]
         newChildren = []
         
-        for args in newChildrenArgs:
-            newChildren.append(SplittingLocalGPChild(*args,priorMean=self.mean_module,priorLik=copy.deepcopy(self.likelihood),
-                                                     split=True))
-            
-            '''
-            for child in newChildren:
-                print(child.covar_module.state_dict())
-            '''
+        #In the event we want the new models to inherit the likelihood for continuity of predictions, give a prior likelihood.
+        if self.parent.inheritLikelihood:
+            for args in newChildrenArgs:
+                newChildren.append(SplittingLocalGPChild(*args,priorMean=self.mean_module,priorLik=copy.deepcopy(self.likelihood),
+                                                        split=True))
+        else:
+            for args in newChildrenArgs:
+                newChildren.append(SplittingLocalGPChild(*args,priorMean=self.mean_module,priorLik=copy.deepcopy(self.likelihood),
+                                                        split=True))
         
         return newChildren
     

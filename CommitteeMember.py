@@ -52,9 +52,9 @@ class CommitteeMember(gpytorch.models.ExactGP):
         
         if needPred:
             #Take mean and var of dist
-            mean,var = posteriorDist.mean,posteriorDist.variance
+            mean,var = posteriorDist.mean.double(),posteriorDist.variance.double()
         
-            beta = -.5*torch.log(var)
+            beta = .5*torch.log(self.varStarStar/var)
         
             return mean,var,beta
     

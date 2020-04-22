@@ -39,8 +39,8 @@ def getSummaryStats(df):
 df = loadFiles()
 
 series = {}
-#models = ['splitting','local','exact']
-models = ['splitting']
+models = ['splitting','exact','rbcm']
+#models = ['splitting']
 metrics = ['avg_mse','avg_memory_usage','avg_training_time']
 ylabels = ['MSE','Memory Usage (Kb)','Training Time (sec)']
 for metric in metrics:
@@ -51,7 +51,7 @@ for metric in metrics:
         
 for model in models:
     #toyFnNoiseData = df.loc[(df['model']==model)&(df['response_function']=='bimodal')&(df['noise']==1)&(df['params']=='fantasyUpdate=False')]
-    toyFnNoiseData = df.loc[(df['model']==model)&(df['response_function']=='testdata')&(df['noise']==0)&(df['mean']=='constant')]
+    toyFnNoiseData = df.loc[(df['model']==model)&(df['response_function']=='toyfn')&(df['noise']==1)&(df['mean']=='constant')]
     stats = getSummaryStats(toyFnNoiseData)
     for metric in metrics:
         #series[metric].append(stats[0][metric][:25])
@@ -61,7 +61,7 @@ for model in models:
         cihw = .96 * stats[1][metric] / np.sqrt(10)
         series[metric]['cihw'].append(cihw)
         
-observations_vals = df['observations'].unique()
+observations_vals = df['observations'].unique()[:25]
 #observations_vals = df['observations'].unique()
 
 for metric,ylabel in zip(metrics,ylabels):
@@ -70,10 +70,12 @@ for metric,ylabel in zip(metrics,ylabels):
     
     for index in range(len(series[metric]['mean'])):
         
-        mean = series[metric]['mean'][index]
-        cihw = series[metric]['cihw'][index]
+        mean = series[metric]['mean'][index][:25]
+        cihw = series[metric]['cihw'][index][:25]
         
         ax.plot(observations_vals,mean,'-o')
+        if metric=='avg_mse':
+            ax.set_ylim(bottom=0,top=6)
         ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.7)
     '''
     mean = series[metric]['mean'][0]

@@ -31,7 +31,7 @@ More docstring here
 
 '''
 class RegularGPModel:
-    def __init__(self, likelihoodFn, kernel, inheritKernel=True, fantasyUpdate=False, **kwargs):        
+    def __init__(self, likelihoodFn, kernel, inheritKernel=True, fantasyUpdate=True, **kwargs):        
         #Initialize a list to contain local child models
         self.covar_module = kernel
         self.mean_module = kwargs['mean'] if 'mean' in kwargs else gpytorch.means.ConstantMean
@@ -43,7 +43,7 @@ class RegularGPModel:
         self.inheritKernel = inheritKernel
         
         #Number of training iterations used each time child model is updated
-        self.training_iter = 200
+        self.training_iter = 500
         
         #Default output dimension is 1 (scalar)
         self.outputDim = 1 if 'outputDim' not in kwargs else kwargs['outputDim']

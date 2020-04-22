@@ -68,3 +68,37 @@ Returns:
 '''
 def updateInverseCovarWoodbury(K_0inv,K):
     return 2*K_0inv - K_0inv.matmul(K).matmul(K_0inv)
+
+'''
+Compute the Haversine distance between two points on the Earth. Used to spatial regression
+'''
+def haversine(x,y):
+    x,y = x.squeeze(0),y.squeeze(0)
+    A = torch.sin((x[0]-y[0])/2)**2+torch.cos(x[0])*torch.cos(y[0])*torch.sin((x[1]-y[1])/2)**2
+    C = 2*torch.atan2(A**.5, (1-A)**.5).unsqueeze(0).unsqueeze(1)
+    return C*6371
+
+'''
+Create a function which projects a latitude and longitude to the Gnomomic projection at P
+'''
+def getGnomomic(P):
+    P = P.squeeze()
+    
+    def project(x):
+        x = x.squeeze()
+        t1 = torch.sin(x[:,0])*torch.sin(P[0])
+        t2 = torch.cos(P[0])*torch.cos(P[1]-x[:,1])
+        cosC = t1 + torch.cos(x[:,0])*t2
+        lat0 = torch.cos(P[1])*torch.sin(P[0]-x[:,0])/cosC
+        lon0 = (t1-torch.sin(x[:,1])*t2)/cosC
+        
+        return torch.stack([lat0,lon0],dim=1)
+    
+    return project
+        
+        
+
+        
+        
+    
+    

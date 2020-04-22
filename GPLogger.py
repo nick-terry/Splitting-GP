@@ -54,11 +54,11 @@ class ExperimentLogger:
             logging.debug('Test Point {0} '.format(i))
             logging.debug('Local Preds: {1}'.format(i,localPredictions[i]))
             logging.debug('Local Pred Weights: {1}'.format(i,localWeights[i]))
-            logging.debug('Dists to Children: {1}'.format(i,minDists[i]))
+            #logging.debug('Dists to Children: {1}'.format(i,minDists[i]))
             logging.debug('Prediction {0}: {1}'.format(i,prediction[i]))
             logging.debug('Ground Truth {0}: {1}'.format(i,groundTruth[i]))
         
-        centers = torch.stack(centers)
+        #centers = torch.stack(centers)
         
         self.make_data_plot(trainingPoints,fullTestPoints,newTestPoints,centers,prediction,groundTruth)
         
@@ -75,9 +75,11 @@ class ExperimentLogger:
         axes.scatter(trainingPoints[:,0].detach(),trainingPoints[:,1].detach(),c='blue',s=8,zorder=2)
         axes.scatter(fullTestPoints[:,0].detach(),fullTestPoints[:,1].detach(),c='orange',s=8,zorder=4)
         axes.scatter(newTestPoints[:,0].detach(),newTestPoints[:,1].detach(),c='red',s=8,zorder=6)
+        '''
         if centers.dim()==1:
             centers = centers.unsqueeze(0)
-        axes.scatter(centers[:,0].detach(),centers[:,1].detach(),c='green',s=24,zorder=8)
+        '''
+        #axes.scatter(centers[:,0].detach(),centers[:,1].detach(),c='green',s=24,zorder=8)
         plt.savefig('error-data-fig-{0}.png'.format(t))
         
         #Make a plot showing the prediction and ground truth side-by-side    

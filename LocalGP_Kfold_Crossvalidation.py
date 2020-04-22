@@ -131,11 +131,13 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,mode
         randCoords = xyGrid[randPairs[0,:],randPairs[1,:]].unsqueeze(0)
         
         #Need to unpack these since we are returning local predictions now
-        results = model.predict(randCoords)
+        results = model.predict(randCoords,True)
         
         #Exact models do not track additional info about how prediction is computed
-        if modelType in {'exact','rbcm'}:
+        if modelType in {'exact'}:
             prediction = results
+        elif modelType in {'rbcm'}:
+            prediction,localPredictions,localWeights = results[0],results[1],results[2]
         else:
             prediction,localPredictions,localWeights,minDists = results[0],results[1],results[2],results[3]
     
@@ -143,7 +145,7 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,mode
         mse = torch.sum(torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2),dim=list(range(prediction.dim())))/(numSamples/k)
        
          #If the MSE is very high or nan, log some key info to debug
-        if(mse!=mse):
+        if(mse>100 or mse!=mse):
             newTestPairs = completeRandIndices[:,newlyWithheldPoints]
             newTestPoints = xyGrid[newTestPairs[0,:],newTestPairs[1,:]].unsqueeze(0)    
             trainingData = []
@@ -161,7 +163,7 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,mode
                 kernelHyperParams.append(child.covar_module.lengthscale)
                 #covarMatrix = child.covar_module(newTestPoints).evaluate()
                 #covarMatrices += covarMatrix
-                centers.append(child.center)
+                centers.append(child.center if modelType=='splitting' else 0)
                 numObsList.append(child.train_inputs[0].size())
                 
             logger.log_mse_spike(fullTestPoints=randCoords,
@@ -180,7 +182,7 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,mode
                                  groundTruth=z[randPairs[0,:],randPairs[1,:]],
                                  localPredictions=localPredictions,
                                  localWeights=localWeights,
-                                 minDists=minDists)
+                                 minDists=minDists if modelType=='splitting' else [0]*len(model.children))
         
         meanSquaredErrors.append(mse.detach())
         elapsedTrainingTimes.append(t1-t0)
