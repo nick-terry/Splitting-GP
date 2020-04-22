@@ -171,19 +171,70 @@ class LocalGPModel:
     Make a prediction at the point(s) x. This method is a wrapper which handles the messy case of multidimensional inputs.
     The actual prediction is done in the predictAtPoint helper method. If no M is given, use default
     '''
-    def predict(self,x,individualPredictions=False):
-        return self.predict(x,self.M,individualPredictions)
+    def predict(self,x,individualPredictions=False,getVar=False):
+        return self.predict_Helper(x,self.M,individualPredictions,getVar)
     
     '''
     Make a prediction at the point(s) x. This method is a wrapper which handles the messy case of multidimensional inputs.
     The actual prediction is done in the predictAtPoint helper method
     '''
-    def predict(self,x,M=None,individualPredictions=True):
+    def predict_Helper(self,x,M,individualPredictions,getVar):
+        if M is None:
+            M = len(self.children)
+        else:
+            M = min(M,len(self.children))
         
         #Update all of the covar modules to the most recent
         for child in self.children:
             child.covar_module = self.covar_module
+        
+        mean_predictions = []
+        var_predictions = []
+        
+        #Get the predictions of each child at each point
+        for child in self.children:
+            prediction = child.predict(x)
             
+            mean_predictions.append(prediction.mean)
+            var_predictions.append(prediction.variance)
+        
+        #Concatenate into pytorch tensors
+        mean_predictions = torch.stack(mean_predictions).transpose(0,1)
+        var_predictions = torch.stack(var_predictions).transpose(0,1)
+        
+        #Get the covar matrix
+        distances = self.getDistanceToCenters(x)
+        
+        #Get the M closest child models. Need to squeeze out extra dims of 1.
+        sortResults = torch.sort(distances.squeeze(-1).squeeze(-1),descending=True)
+        
+        #Get the minDists for weighting predictions
+        minDists = sortResults[0][:,:M].squeeze(-1) if sortResults[0].dim()>0 else sortResults[0].unsqueeze(0)
+        
+        #Get the min indices for selecting the correct predictions
+        minIndices = sortResults[1][:,:M] if sortResults[1].dim()>0 else sortResults[1].unsqueeze(0)
+        
+        #Get the associate predictions
+        mean_predictions = mean_predictions.gather(1,minIndices)
+        var_predictions = var_predictions.gather(1,minIndices)
+        
+        #Compute weights for the predictions. Switch to double precision for this somewhat unstable computation
+        minDists = minDists.double()
+        
+        #If we have M=1, we need to unsqueeze for the summation
+        if minDists.dim() == 1:
+            minDists = minDists.unsqueeze(-1)
+        
+        #Sum the m smallest distances for each prediction point to normalize
+        denominator = torch.sum(minDists,dim=1).unsqueeze(-1).repeat((1,minDists.shape[1]))
+        
+        weights = minDists/denominator
+        
+        #Compute weighted predictions. IMPORTANT: the weighted variance predictions are negatively biased since we do not account for the covariance between models
+        weighted_mean_predictions = torch.sum(weights * mean_predictions,dim=1)
+        weighted_var_predictions = torch.sum(weights**2 * var_predictions,dim=1)
+        
+        '''
         #If x is a tensor with dimension d1 x d2 x ... x dk x n, iterate over the extra dims and predict at each point
         #Create a 2D list which ranges over all values for each input dimension
         dimRangeList = [list(range(dimSize)) for dimSize in x.shape[:-1]]
@@ -212,9 +263,11 @@ class LocalGPModel:
         
         if individualPredictions:
             return predictions,individualList,weightsList,minDistsList
-        
+        '''
+        if getVar:
+            return weighted_mean_predictions,weighted_var_predictions
         else:
-            return predictions
+            return weighted_mean_predictions
     '''
     Make a prediction at the point x by finding the M closest child models and
     computing a weighted average of their predictions. By default M is the number

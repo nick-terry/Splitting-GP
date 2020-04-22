@@ -15,12 +15,6 @@ from itertools import product
 from math import inf
 import TestData
 import pandas as pd
-#import sklearn as skl
-
-
-def getSKLearnModel():
-    model = skl.gaussian_process.GaussianProcessRegressor()
-    return model
 
 def getIcethick():
     predictor,response = TestData.icethick(scale=False)
@@ -68,9 +62,9 @@ def evalModel(M=None,splittingLimit=500,inheritLikelihood=True,splitting=True):
     t0 = time.time()
     j = 0
     if splitting:
-        for index in range(int(predictorsTrain.shape[0]))[::500]:
-            x_train = predictorsTrain[index:index+500]
-            y_train = responseTrain[index:index+500]
+        for index in range(int(predictorsTrain.shape[0]))[::splittingLimit]:
+            x_train = predictorsTrain[index:index+splittingLimit]
+            y_train = responseTrain[index:index+splittingLimit]
             model.update(x_train,y_train)
             print(j)
             j += 1
@@ -86,16 +80,6 @@ def evalModel(M=None,splittingLimit=500,inheritLikelihood=True,splitting=True):
     prediction = totalPreds[0].detach()
     '''
     
-    rmse = 0#torch.sqrt(torch.mean((prediction.squeeze(-1)-responseTest)**2))
-    return rmse,model
-
-def evalSKLModel():
-    model = getSKLearnModel()
-    j=0
-    for index in range(predictorsTrain.shape[0]):
-            model.fit(predictorsTrain[:index+1,:],responseTrain[:index+1])
-            print(j)
-            j += 1
     return model
 
 def evalgptModel():
@@ -144,6 +128,8 @@ def evalgptModel():
         optimizer.step()
 
     return model
+
+
 '''
 model = evalgptModel()
 
@@ -156,19 +142,27 @@ with torch.no_grad(), gpytorch.settings.fast_pred_var():
 rmse = torch.sqrt(torch.mean((preds.mean-responseTest)**2))
 '''
 
-paramsList = [{'M':None,'splittingLimit':500,'inheritLikelihood':True,'splitting':True}]
+paramsList = [{'M':None,'splittingLimit':50,'inheritLikelihood':True,'splitting':True},
+              {'M':None,'splittingLimit':125,'inheritLikelihood':True,'splitting':True}.
+              {'M':None,'splittingLimit':250,'inheritLikelihood':True,'splitting':True},
+              {'M':None,'splittingLimit':500,'inheritLikelihood':True,'splitting':True},
+              {'M':None,'splittingLimit':1000,'inheritLikelihood':True,'splitting':True},
+              {'M':None,'splittingLimit':2000,'inheritLikelihood':True,'splitting':True},
+              {'M':None,'splittingLimit':10000,'inheritLikelihood':True,'splitting':True}]
 
 resultsArr = torch.zeros((len(paramsList),1))
 
 for i in range(len(paramsList)):
-    resultsArr[i],model = evalModel(**paramsList[i])    
+    model = evalModel(**paramsList[i])    
+    preds = model.predict(predictorsTest)
+    rmse = torch.sqrt(torch.mean((preds-responseTest)**2))
+    resultsArr[i] = rmse
 
-'''
 df = pd.DataFrame()
 df['params'] = paramsList
-df['rmse'] = resultsArr.numpy()
+df['rmse'] = resultsArr.detach().numpy()
 df.to_csv('kin40_results_splitting.csv')
-'''
+
 '''
 #Define a common scale for color mapping for contour plots
 maxAbsVal = torch.max(torch.abs(response))
