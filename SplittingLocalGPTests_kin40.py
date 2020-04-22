@@ -15,7 +15,7 @@ from itertools import product
 from math import inf
 import TestData
 import pandas as pd
-import sklearn as skl
+#import sklearn as skl
 
 
 def getSKLearnModel():
@@ -68,9 +68,9 @@ def evalModel(M=None,splittingLimit=500,inheritLikelihood=True,splitting=True):
     t0 = time.time()
     j = 0
     if splitting:
-        for index in range(predictorsTrain.shape[0]):
-            x_train = predictorsTrain[index].unsqueeze(0)
-            y_train = responseTrain[index].unsqueeze(0)
+        for index in range(int(predictorsTrain.shape[0]))[::500]:
+            x_train = predictorsTrain[index:index+500]
+            y_train = responseTrain[index:index+500]
             model.update(x_train,y_train)
             print(j)
             j += 1
@@ -80,28 +80,95 @@ def evalModel(M=None,splittingLimit=500,inheritLikelihood=True,splitting=True):
     t1 = time.time()
     print('Done training')
     
+    '''
     #Predict over the whole grid for plotting
     totalPreds = model.predict(predictorsTest,individualPredictions=False)
     prediction = totalPreds[0].detach()
+    '''
     
-    
-    rmse = torch.sqrt(torch.mean((prediction.squeeze(-1)-responseTest)**2))
-    print(rmse)
-    return rmse
+    rmse = 0#torch.sqrt(torch.mean((prediction.squeeze(-1)-responseTest)**2))
+    return rmse,model
 
+def evalSKLModel():
+    model = getSKLearnModel()
+    j=0
+    for index in range(predictorsTrain.shape[0]):
+            model.fit(predictorsTrain[:index+1,:],responseTrain[:index+1])
+            print(j)
+            j += 1
+    return model
+
+def evalgptModel():
+    train_x = predictorsTrain
+    train_y = responseTrain
+    class ExactGPModel(gpytorch.models.ExactGP):
+        
+        def __init__(self, train_x, train_y, likelihood):
+            super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
+            self.mean_module = gpytorch.means.ZeroMean()
+            self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel(ard_num_dims=8))
+    
+        def forward(self, x):
+            mean_x = self.mean_module(x)
+            covar_x = self.covar_module(x)
+            return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+    
+    likelihood = gpytorch.likelihoods.GaussianLikelihood()
+    
+    model = ExactGPModel(train_x, train_y, likelihood)
+    likelihood = model.likelihood
+    model.train()
+    likelihood.train()
+    model.train_inputs = (torch.cat([model.train_inputs[0], predictorsTrain]),)
+    model.train_targets = torch.cat([model.train_targets, responseTrain])
+    # Use the adam optimizer
+    optimizer = torch.optim.Adam([
+        {'params': model.parameters()},  # Includes GaussianLikelihood parameters
+    ], lr=0.1)
+    
+    # "Loss" for GPs - the marginal log likelihood
+    mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
+    training_iter = 50
+    for i in range(training_iter):
+        # Zero gradients from previous iteration
+        optimizer.zero_grad()
+        # Output from model
+        output = model(model.train_inputs[0])
+        # Calc loss and backprop gradients
+        loss = -mll(output, model.train_targets)
+        loss.backward()
+        print('Iter %d/%d - Loss: %.3f   noise: %.3f' % (
+            i + 1, training_iter, loss.item(),
+            model.likelihood.noise.item()
+        ))
+        optimizer.step()
+
+    return model
+'''
+model = evalgptModel()
+
+model.eval()
+model.likelihood.eval()
+
+with torch.no_grad(), gpytorch.settings.fast_pred_var():
+    preds = model.likelihood(model(predictorsTest))
+    
+rmse = torch.sqrt(torch.mean((preds.mean-responseTest)**2))
+'''
 
 paramsList = [{'M':None,'splittingLimit':500,'inheritLikelihood':True,'splitting':True}]
 
 resultsArr = torch.zeros((len(paramsList),1))
 
 for i in range(len(paramsList)):
-    resultsArr[i] = evalModel(**paramsList[i])    
+    resultsArr[i],model = evalModel(**paramsList[i])    
 
+'''
 df = pd.DataFrame()
 df['params'] = paramsList
 df['rmse'] = resultsArr.numpy()
 df.to_csv('kin40_results_splitting.csv')
-
+'''
 '''
 #Define a common scale for color mapping for contour plots
 maxAbsVal = torch.max(torch.abs(response))

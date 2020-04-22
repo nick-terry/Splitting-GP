@@ -10,8 +10,8 @@ import gpytorch
 
 from gpytorch.utils.broadcasting import _mul_broadcast_shape
 from gpytorch.utils.memoize import add_to_cache, is_in_cache
+from gpytorch.lazy.root_lazy_tensor import RootLazyTensor
 
-from varBoundFunctions import *
 import numpy as np
 import itertools
 import copy
@@ -43,7 +43,7 @@ class LocalGPModel:
         self.inheritKernel = inheritKernel
         
         #Number of training iterations used each time child model is updated
-        self.training_iter = 200
+        self.training_iter = 25
         
         #Default output dimension is 1 (scalar)
         self.outputDim = 1 if 'outputDim' not in kwargs else kwargs['outputDim']
@@ -144,7 +144,7 @@ class LocalGPModel:
         #Compute distances between new input x and existing inputs
         distances = self.getDistanceToCenters(x)
         #Get the single minimum distance from the tensor (max covar)
-        minResults = torch.max(distances,0)
+        minResults = torch.max(distances,1)
         return minResults[1],minResults[0]
     
     '''
@@ -179,9 +179,11 @@ class LocalGPModel:
     The actual prediction is done in the predictAtPoint helper method
     '''
     def predict(self,x,M=None,individualPredictions=True):
+        
         #Update all of the covar modules to the most recent
         for child in self.children:
             child.covar_module = self.covar_module
+            
         #If x is a tensor with dimension d1 x d2 x ... x dk x n, iterate over the extra dims and predict at each point
         #Create a 2D list which ranges over all values for each input dimension
         dimRangeList = [list(range(dimSize)) for dimSize in x.shape[:-1]]
@@ -198,7 +200,6 @@ class LocalGPModel:
             minDistsList = []
         
         for inputIndices in inputDimIterator:
-            print(inputIndices)
             results = self.predictAtPoint(x[inputIndices].unsqueeze(0),M,individualPredictions)
             
             if individualPredictions:
@@ -316,18 +317,11 @@ class LocalGPChild(gpytorch.models.ExactGP):
         self.lastUpdated = True
         
         '''
-        Since the data is assumed to arrive as pairs {x,y}, we assume that the 
-        initial train_x,train_y are singleton, and set train_x as the intial
-        center for the model.
+        Compute the center as the mean of the training data
         '''
         self.center = torch.mean(train_x,dim=0)
         self.train_x = train_x
         self.train_y = train_y
-        
-        #These properties are for computing the posterior variance bounds
-        self.k = None
-        self.kinv = None
-        self.kinvInnerSums = None
         
         self.initTraining()
         
@@ -339,22 +333,22 @@ class LocalGPChild(gpytorch.models.ExactGP):
     '''
     Update the child model to incorporate the training pair {x,y}
     '''
+    '''
     def update(self,x,y):
         if self.prediction_strategy is None:
             self.predict(x)
         
-        '''
-        If this was the last child to be updated, or inheritKernel=False, we can do a fantasy update
-        without updating the covar cache. Otherwise, we can update the covar_module from the parent
-        '''
+        
+        #If this was the last child to be updated, or inheritKernel=False, we can do a fantasy update
+        #without updating the covar cache. Otherwise, we can update the covar_module from the parent
+        
         if not self.lastUpdated and self.parent.inheritKernel:
                 self.covar_module = self.parent.covar_module
                 self.predict(x)
         
-        '''
-        Sometimes get an error when attempting Cholesky decomposition.
-        In this case, refit a new model.
-        '''
+        #Sometimes get an error when attempting Cholesky decomposition.
+        #In this case, refit a new model.
+        
         try:
             
             updatedModel = self.get_fantasy_model(inputs=x, targets=y)
@@ -389,6 +383,22 @@ class LocalGPChild(gpytorch.models.ExactGP):
         updatedModel.predict(x)
         
         return updatedModel
+    '''
+    def update(self,x,y):
+        #Sync covar
+        self.covar_module = self.parent.covar_module
+        
+        #Update train_x, train_y
+        self.train_x = torch.cat([self.train_x, x])
+        self.train_y = torch.cat([self.train_y, y])
+        
+        #Update the data which can be used for optimizing
+        self.train_inputs = (self.train_x,)
+        self.train_targets = self.train_y
+        
+        self.retrain()
+        
+        return self
     
     '''
     Perform a rank-one update of the child model's inverse covariance matrix cache.
@@ -443,6 +453,28 @@ class LocalGPChild(gpytorch.models.ExactGP):
             
         #Need to perform a prediction so that get_fantasy_model may be used to update later
         self.predict(self.train_x)
+    
+    '''
+    Retrain model after new data is obtained
+    '''
+    def retrain(self):
+        #Switch to training mode
+        self.train()
+        self.likelihood.train()
+        
+        mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self)
+        
+        #Perform training iterations
+        for i in range(self.parent.training_iter):
+            self.optimizer.zero_grad()
+            output = self(self.train_x)
+            loss = -mll(output, self.train_y)
+            loss.backward()
+            if loss < 0:
+                break
+            else:
+                self.optimizer.step()
+    
     '''
     Evaluate the child model to get the predictive posterior distribution
     '''
@@ -454,65 +486,6 @@ class LocalGPChild(gpytorch.models.ExactGP):
             prediction = self.likelihood(self(x))
         
         return prediction
-    
-    '''
-    Compute the posterior variance bounds for an **isotropic** kernel
-    
-    "direct" method computes posterior variance bounds directly using the 
-    inverse kernel matrix and the assumption that distance between consecutive
-    training data is at most tau apart
-    
-    "eigen" method computes the bounds using the maximal eigenvalue of the kernel matrix
-    '''
-    def postVarBound(self,x,train_x,**kwargs):
-        #If the kernel matrix is not yet computed, compute it
-        n = train_x.shape[0]
-        if self.k is None:
-            #Result should be square nxn tensor
-            train_x = train_x.view([n,1])
-            self.k = self.covar_module(train_x,train_x).evaluate()
-        
-        if kwargs['method'] is None:
-            kwargs['method'] == 'direct'
-        
-        #Compute raw bounds for posterior variance directly by inverting the kernel matrix
-        if kwargs['method'] == 'direct':
-            if self.kinv is None:
-                self.kinv = torch.inverse(self.k)
-                
-            #Compute the inner summations needed for the posterior variance bounds.
-            #Result will be a jx1 tensor where result[j] is the sum of elements in 
-            #jth column of kinv
-            def innerSums():
-                return torch.sum(self.kinv,dim=0)
-             
-            if self.kinvInnerSums is None:
-                self.kinvInnerSums = innerSums()
-            
-            #Define (n-1)x1 tensor of values at which to evaluate the kernel
-            
-            boundVals = torch.tensor([((n-j+1)*tau)**2 for j in range(1,n)]).view([n-1,1])
-            
-            #Compute kernel evaluated for |x-x_n|, then add to kernel evaluated at boundVals and multiply by corresponding column sum from kinv
-            #k_x_xn = self.covar_module(x.view([1,1]),train_x[-1].view([1,1]))**2
-            k_x_xn = self.covar_module(x.view([1,1]),train_x[-1].view([1,1])).evaluate()**2
-            outerSumTerms = self.covar_module(boundVals,torch.zeros(n-1).view([n-1,1]),diag=True)**2*self.kinvInnerSums[:-1]
-            #Compute kernel evaluated at d=0, then return bounds
-            zero_tensor = torch.zeros([1,1])
-            k_0 = self.covar_module(zero_tensor,zero_tensor).evaluate()
-            return k_0 - torch.sum(outerSumTerms) - k_x_xn * self.kinvInnerSums[-1]
-        
-        if kwargs['method'] == 'eigen':
-            #Compute kernel evaluated at d=0
-            zero_tensor = torch.zeros([1,1])
-            k_0 = self.covar_module(zero_tensor,zero_tensor).evaluate()
-            
-            #Find eigenvalues of k. We can safely take the real part since
-            #k is positive definite and therefore has only positive real eigenvalues.
-            eigVals = np.real(np.linalg.eigvals(self.k.detach()))
-            
-            #Return bound
-            return float(k_0 - (torch.norm(self.covar_module(x+torch.zeros(n),train_x,diag=True))**2)/np.max(eigVals))
         
 '''
 A child model which computes an approximate posterior distribution using inducing points.
@@ -551,11 +524,6 @@ class ApproximateGPChild(gpytorch.models.VariationalGP):
         self.center = train_x
         self.train_x = train_x
         self.train_y = train_y
-        
-        #These properties are for computing the posterior variance bounds
-        self.k = None
-        self.kinv = None
-        self.kinvInnerSums = None
         
         self.initTraining()
         
@@ -609,6 +577,8 @@ class ApproximateGPChild(gpytorch.models.VariationalGP):
             loss.backward()
             self.optimizer.step()
     
+    
+    
     '''
     Retrain model after new data is obtained
     '''
@@ -637,64 +607,3 @@ class ApproximateGPChild(gpytorch.models.VariationalGP):
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             prediction = self.likelihood(self(x))
         return prediction
-        
-    '''
-    Compute the posterior variance bounds for an **isotropic** kernel
-    
-    "direct" method computes posterior variance bounds directly using the 
-    inverse kernel matrix and the assumption that distance between consecutive
-    training data is at most tau apart
-    
-    "eigen" method computes the bounds using the maximal eigenvalue of the kernel matrix
-    '''
-    def postVarBound(self,x,train_x,**kwargs):
-        #If the kernel matrix is not yet computed, compute it
-        n = train_x.shape[0]
-        if self.k is None:
-            #Result should be square nxn tensor
-            train_x = train_x.view([n,1])
-            self.k = self.covar_module(train_x,train_x).evaluate()
-        
-        if kwargs['method'] is None:
-            kwargs['method'] = 'direct'
-        
-        #Compute raw bounds for posterior variance directly by inverting the kernel matrix
-        if kwargs['method'] is 'direct':
-            if self.kinv is None:
-                self.kinv = torch.inverse(self.k)
-                
-            #Compute the inner summations needed for the posterior variance bounds.
-            #Result will be a jx1 tensor where result[j] is the sum of elements in 
-            #jth column of kinv
-            def innerSums():
-                return torch.sum(self.kinv,dim=0)
-             
-            if self.kinvInnerSums is None:
-                self.kinvInnerSums = innerSums()
-            
-            #Define (n-1)x1 tensor of values at which to evaluate the kernel
-            
-            boundVals = torch.tensor([((n-j+1)*tau)**2 for j in range(1,n)]).view([n-1,1])
-            
-            #Compute kernel evaluated for |x-x_n|, then add to kernel evaluated at boundVals and multiply by corresponding column sum from kinv
-            #k_x_xn = self.covar_module(x.view([1,1]),train_x[-1].view([1,1]))**2
-            k_x_xn = self.covar_module(x.view([1,1]),train_x[-1].view([1,1])).evaluate()**2
-            outerSumTerms = self.covar_module(boundVals,torch.zeros(n-1).view([n-1,1]),diag=True)**2*self.kinvInnerSums[:-1]
-            #Compute kernel evaluated at d=0, then return bounds
-            zero_tensor = torch.zeros([1,1])
-            k_0 = self.covar_module(zero_tensor,zero_tensor).evaluate()
-            return k_0 - torch.sum(outerSumTerms) - k_x_xn * self.kinvInnerSums[-1]
-        
-        if kwargs['method'] is 'eigen':
-            #Compute kernel evaluated at d=0
-            zero_tensor = torch.zeros([1,1])
-            k_0 = self.covar_module(zero_tensor,zero_tensor).evaluate()
-            
-            #Find eigenvalues of k. We can safely take the real part since
-            #k is positive definite and therefore has only positive real eigenvalues.
-            eigVals = np.real(np.linalg.eigvals(self.k.detach()))
-            
-            #Return bound
-            return float(k_0 - (torch.norm(self.covar_module(x+torch.zeros(n),train_x,diag=True))**2)/np.max(eigVals))
-    
-    

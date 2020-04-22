@@ -47,17 +47,23 @@ class SplittingLocalGPModel(LocalGPModel):
             by using a special data structure such as a binary tree
             '''
             closestChildIndex,minDist = self.getClosestChild(x)
+            
+            #loop over children and assign them the new data points
+            for childIndex in range(len(self.children)):
+                #Get the data which are closest to the current child
+                x_child = x[closestChildIndex==childIndex]
+                y_child = y[closestChildIndex==childIndex]
                 
-            closestChildModel = self.children[closestChildIndex]
+                closestChildModel = self.children[childIndex]
+                
+                #Create new model(s) which additionally incorporates the pair {x,y}. This will return more than one model
+                #if a split occurs.
+                newChildModels = closestChildModel.update(x_child,y_child)
             
-            #Create new model(s) which additionally incorporates the pair {x,y}. This will return more than one model
-            #if a split occurs.
-            newChildModels = closestChildModel.update(x,y)
-            
-            #Replace the existing model with the new model(s) which incorporates new data
-            del self.children[closestChildIndex]
-            self.addChildren(newChildModels)
-            del closestChildModel
+                #Replace the existing model with the new model(s) which incorporates new data
+                del self.children[childIndex]
+                self.addChildren(newChildModels)
+
     
     '''
     Add one or more child models
@@ -105,7 +111,7 @@ class SplittingLocalGPChild(LocalGPChild):
         train_yDet = self.train_y.detach()
         
         '''
-        Split the inputs into clusters using PDDP
+        Split the inputs into clusters using PCA
         '''
         dataMat = torch.cat((train_yDet.unsqueeze(-1),train_xDet),-1)
         labels = pddp(dataMat)
@@ -123,11 +129,11 @@ class SplittingLocalGPChild(LocalGPChild):
         if self.parent.inheritLikelihood:
             for args in newChildrenArgs:
                 newChildren.append(SplittingLocalGPChild(*args,priorMean=self.mean_module,priorLik=copy.deepcopy(self.likelihood),
-                                                        split=True))
+                                                        split=False))
         else:
             for args in newChildrenArgs:
                 newChildren.append(SplittingLocalGPChild(*args,priorMean=self.mean_module,priorLik=copy.deepcopy(self.likelihood),
-                                                        split=True))
+                                                        split=False))
         
         return newChildren
     
@@ -136,27 +142,42 @@ class SplittingLocalGPChild(LocalGPChild):
     than the splitting threshold, split it. By default, it will be split in half.
     '''
     def update(self, x, y):
-        #Check if the new pair will make the model larger than the threshold
-        if self.train_x.shape[0] + 1 >= self.parent.splittingLimit:
+        
+        #Update train_x, train_y
+        self.train_x = torch.cat([self.train_x, x])
+        self.train_y = torch.cat([self.train_y, y])
+        
+        #Update the data which can be used for optimizing
+        self.train_inputs = (self.train_x,)
+        self.train_targets = self.train_y
+        
+        #Check if the new data puts the child past splitting threshold
+        if self.train_x.shape[0] >= self.parent.splittingLimit:
             print('Splitting a local child model...')
-            self.train_x = torch.cat((self.train_x,x))
-            self.train_y = torch.cat((self.train_y,y))
             return self.split()
         
         else:
-            '''
-            If this was the last child to be updated, or inheritKernel=False, we can do a fantasy update
-            without updating the covar cache. Otherwise, we can do a rank-one update of the covar cache
-            prior to the fantasy update.
-            '''
+            #Retrain
+            self.retrain()
+            
+            #Update parent's covar_module
+            self.parent.covar_module = self.covar_module
+            
+            return self
+        '''
+        else:
+            
+            #If this was the last child to be updated, or inheritKernel=False, we can do a fantasy update
+            #without updating the covar cache. Otherwise, we can do a rank-one update of the covar cache
+            #prior to the fantasy update.
             if not self.lastUpdated and self.parent.inheritKernel:
                 self.covar_module = self.parent.covar_module
                 self.predict(x)
             
-            '''
-            Sometimes get an error when attempting Cholesky decomposition.
-            In this case, refit a new model.
-            '''
+            
+            #Sometimes get an error when attempting Cholesky decomposition.
+            #In this case, refit a new model.
+            
             try:
                 updatedModel = self.get_fantasy_model(inputs=x, targets=y)
             
@@ -178,7 +199,7 @@ class SplittingLocalGPChild(LocalGPChild):
                                                      priorMean=self.mean_module,
                                                      priorLik=copy.deepcopy(self.likelihood),
                                                      split=True)
-                
+            
                 
             #Update the data properties
             updatedModel.train_x = updatedModel.train_inputs[0]
@@ -187,9 +208,9 @@ class SplittingLocalGPChild(LocalGPChild):
             #Compute the center of the new model
             updatedModel.center = torch.mean(updatedModel.train_x,dim=0)
             
-            #Update parent's covar_module
-            self.parent.covar_module = self.covar_module
             
             #Need to perform a prediction so that get_fantasy_model may be used to update later
             updatedModel.predict(x)
+            
             return updatedModel
+        '''
