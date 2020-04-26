@@ -12,25 +12,41 @@ import gpytorch
 import matplotlib.pyplot as plt
 import numpy as np
 from itertools import product
-from math import inf
+from math import inf,ceil
 import TestData
 import pandas as pd
 
 def getIcethick():
     predictor,response = TestData.icethick(scale=False)
-    return predictor,response
+    #Randomly samples some data for training and testing
+    torch.manual_seed(42069)
+    indices = torch.multinomial(torch.ones((predictor.shape[0])).float(),ceil(predictor.shape[0]*.8),replacement=False)
+    
+    #Make masks for selecting test/train data
+    mask = torch.zeros((predictor.shape[0],2),dtype=torch.bool)
+    mask[indices,:] = 1
+    invMask = torch.ones((predictor.shape[0],2),dtype=torch.bool)
+    invMask[indices] = 0
+    
+    predictorsTrain = torch.stack([predictor[:,0][mask[:,0]],predictor[:,1][mask[:,1]]],dim=1)
+    responseTrain = response.masked_select(mask[:,0])
+    
+    predictorsTest = torch.stack([predictor[:,0][invMask[:,0]],predictor[:,1][invMask[:,1]]],dim=1)
+    responseTest = response[invMask[:,0]]
+    
+    return predictorsTrain,responseTrain,predictorsTest,responseTest
 
 def getKin40():
     predictorsTrain,responseTrain,predictorsTest,responseTest = TestData.kin40()
     return predictorsTrain.double(),responseTrain.double(),predictorsTest.double(),responseTest.double()
 
-predictorsTrain,responseTrain,predictorsTest,responseTest = getKin40()
+predictorsTrain,responseTrain,predictorsTest,responseTest = getIcethick()
 
 def makeModel(kernelClass,likelihood,M,splittingLimit,inheritLikelihood):
         #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
-        model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=8),
+        model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=2),
                                                        splittingLimit=splittingLimit,inheritKernel=True,
-                                                       inheritLikelihood=True,
+                                                       inheritLikelihood=False,
                                                        M=M,
                                                        mean=gpytorch.means.ZeroMean)
         return model
@@ -156,7 +172,7 @@ df = pd.DataFrame()
 df['params'] = paramsList
 df['time'] = timeArr.detach().numpy()
 df['rmse'] = resultsArr.detach().numpy()
-df.to_csv('kin40_results_splitting.csv')
+df.to_csv('icethk_results_splitting.csv')
 
 '''
 #Define a common scale for color mapping for contour plots

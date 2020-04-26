@@ -51,18 +51,25 @@ class SplittingLocalGPModel(LocalGPModel):
             #loop over children and assign them the new data points
             for childIndex in range(len(self.children)):
                 #Get the data which are closest to the current child
-                x_child = x[closestChildIndex==childIndex]
-                y_child = y[closestChildIndex==childIndex]
+                x_child = x[closestChildIndex==childIndex].squeeze(0)
+                y_child = y[closestChildIndex==childIndex].squeeze(0)
                 
-                closestChildModel = self.children[childIndex]
+                #If new data is a singleton, unsqueeze the 0th dim
+                if x_child.dim() == 1:
+                    x_child,y_child = x_child.unsqueeze(0),y_child.unsqueeze(0)
+                     
+                #Only proceed if there are some data in the batch assigned to the child
+                if x_child.shape[0] > 0:
+                    
+                    closestChildModel = self.children[childIndex]
+                    
+                    #Create new model(s) which additionally incorporates the pair {x,y}. This will return more than one model
+                    #if a split occurs.
+                    newChildModels = closestChildModel.update(x_child,y_child)
                 
-                #Create new model(s) which additionally incorporates the pair {x,y}. This will return more than one model
-                #if a split occurs.
-                newChildModels = closestChildModel.update(x_child,y_child)
-            
-                #Replace the existing model with the new model(s) which incorporates new data
-                del self.children[childIndex]
-                self.addChildren(newChildModels)
+                    #Replace the existing model with the new model(s) which incorporates new data
+                    del self.children[childIndex]
+                    self.addChildren(newChildModels)
 
     
     '''
@@ -110,12 +117,8 @@ class SplittingLocalGPChild(LocalGPChild):
         train_xDet = self.train_x.detach()
         train_yDet = self.train_y.detach()
         
-        '''
-        Split the inputs into clusters using PCA
-        '''
-        dataMat = torch.cat((train_yDet.unsqueeze(-1),train_xDet),-1)
-        labels = pddp(dataMat)
-        
+        #Split the inputs into clusters using PCA
+        labels = pddp(train_xDet)
         
         #Organize the training inputs, targets, centroids for splitting
         train_x_list = [train_xDet[labels==i] for i in range(k)]
@@ -132,7 +135,7 @@ class SplittingLocalGPChild(LocalGPChild):
                                                         split=False))
         else:
             for args in newChildrenArgs:
-                newChildren.append(SplittingLocalGPChild(*args,priorMean=self.mean_module,priorLik=copy.deepcopy(self.likelihood),
+                newChildren.append(SplittingLocalGPChild(*args,priorMean=self.mean_module,
                                                         split=False))
         
         return newChildren
@@ -158,7 +161,10 @@ class SplittingLocalGPChild(LocalGPChild):
         
         else:
             #Retrain
-            self.retrain()
+            self.trained = False
+            
+            #update center
+            self.center = torch.mean(self.train_x,dim=0)
             
             #Update parent's covar_module
             self.parent.covar_module = self.covar_module

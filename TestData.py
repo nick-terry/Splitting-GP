@@ -10,6 +10,7 @@ import pandas as pd
 import UtilityFunctions
 from pathlib import Path
 import os.path
+from math import ceil
 
 path = Path().absolute()
 
@@ -26,8 +27,10 @@ def icethick(full=False,scale=True,project=False):
         y = torch.tensor(df['Thickness (m)'].to_numpy())
         
         #Get every 3rd element for now to test on smaller scale
+        '''
         x = x[::3,:].float()
         y = y[::3].float()
+        '''
         
         if project:
             #center = torch.mean(x,dim=0)
@@ -52,4 +55,18 @@ def kin40():
     
     return trainInputs,trainLabels,testInputs,testLabels
 
-kin40()
+def protein():
+    
+    df = pd.read_csv('CASP.csv')
+    
+    predictor = torch.tensor(df[['F1','F2','F3','F4','F5','F6','F7','F8','F9']].to_numpy())
+    response = torch.tensor(df['RMSD'].to_numpy())
+    
+    torch.manual_seed(41064)
+    
+    indices = torch.multinomial(torch.ones((predictor.shape[0])).float(),ceil(predictor.shape[0]*.8),replacement=False)
+
+    
+    return predictor,response
+
+protein()
