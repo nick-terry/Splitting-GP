@@ -28,17 +28,25 @@ def getFires():
     predictorsTrain,responseTrain,predictorsTest,responseTest = TestData.forestfire()
     return predictorsTrain.double(),responseTrain.double(),predictorsTest.double(),responseTest.double()
 
+def getSine():
+    predictorsTrain,responseTrain,predictorsTest,responseTest,predictor,response = TestData.onedimsine()
+    return predictorsTrain.double(),responseTrain.double(),predictorsTest.double(),responseTest.double(),predictor.double(),response.double()
+
+def getStep():
+    predictorsTrain,responseTrain,predictorsTest,responseTest,predictor,response = TestData.onedimstep()
+    return predictorsTrain.double(),responseTrain.double(),predictorsTest.double(),responseTest.double(),predictor.double(),response.double()
+
 '''
 predictorsTrain,responseTrain,predictorsTest,responseTest = getFires()
 #log10 transform of response
 responseTrain = torch.log10(responseTrain+1)
 '''
-predictorsTrain,responseTrain,predictorsTest,responseTest = getIcethick()
+predictorsTrain,responseTrain,predictorsTest,responseTest,predictor,response = getStep()
 
 
 def makeModel(kernelClass,likelihood,M,splittingLimit,inheritLikelihood):
         #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
-        model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=2),
+        model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=1),
                                                        splittingLimit=splittingLimit,inheritKernel=True,
                                                        inheritLikelihood=inheritLikelihood,
                                                        M=M,
@@ -97,6 +105,13 @@ def evalModel(M=None,splittingLimit=500,inheritLikelihood=True,mtype='splitting'
             upperIndex = min(index+splittingLimit,int(predictorsTrain.shape[0]))
             x_train = predictorsTrain[index:upperIndex]
             y_train = responseTrain[index:upperIndex]
+            
+            #Need to unsqueeze if the data is 1d
+            if x_train.dim()==1:
+                x_train = x_train.unsqueeze(1)
+                y_train = y_train
+            
+            
             model.update(x_train,y_train)
             print(j)
             j += 1
@@ -198,7 +213,7 @@ paramsList = [{'M':1,'splittingLimit':70,'inheritLikelihood':False,'mtype':'spli
 
 #icethk
 
-paramsList = [{'M':1,'splittingLimit':1000,'inheritLikelihood':False,'mtype':'splitting'}]
+paramsList = [{'M':None,'splittingLimit':501,'inheritLikelihood':True,'mtype':'splitting'}]
 '''
               {'M':1,'splittingLimit':156,'inheritLikelihood':False,'mtype':'splitting'},
               {'M':1,'splittingLimit':625,'inheritLikelihood':False,'mtype':'splitting'},
@@ -283,13 +298,21 @@ with gpytorch.settings.max_cg_iterations(20000):
         timeArr[i] = deltaT
         madArr[i] = mad
 
+fig = plt.figure()
+ax = fig.subplots(1)
+ax.plot(predictor,response,predictor,(model.predict(predictor)).detach())
+centers = model.getCenters()
+ax.scatter(centers,torch.zeros(centers.shape),color='green')
+ax.scatter(predictorsTrain,responseTrain,color='yellow')
+
+'''
 df = pd.DataFrame()
 df['params'] = paramsList
 df['time'] = timeArr.detach().numpy()
 df['rmse'] = resultsArr.detach().numpy()
 df['mad'] = madArr.detach().numpy()
 df.to_csv('icethk_results_splitting.csv')
-
+'''
 
 '''
 #Define a common scale for color mapping for contour plots

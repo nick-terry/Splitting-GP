@@ -25,11 +25,11 @@ while reducing prediction MSE as compared to naive generation of new child model
 '''
 class SplittingLocalGPModel(LocalGPModel):
     def __init__(self, likelihoodFn, kernel, splittingLimit, inheritKernel=True, inheritLikelihood=True, **kwargs):
-        super(SplittingLocalGPModel,self).__init__(likelihoodFn, kernel, **kwargs)
+        super(SplittingLocalGPModel,self).__init__(likelihoodFn, kernel, inheritKernel, **kwargs)
         
         self.splittingLimit = splittingLimit
         self.inheritLikelihood = inheritLikelihood
-
+        
     '''
     TODO: override this method to allow for multiple new child models in the
     event of a split
@@ -102,7 +102,7 @@ class SplittingLocalGPModel(LocalGPModel):
         self.children.append(newChildModel)
         
 class SplittingLocalGPChild(LocalGPChild):
-    def __init__(self, train_x, train_y, parent, inheritKernel=True, **kwargs):
+    def __init__(self, train_x, train_y, parent, inheritKernel, **kwargs):
         super(SplittingLocalGPChild,self).__init__(train_x, train_y, parent, inheritKernel, **kwargs)
         
         
@@ -165,9 +165,12 @@ class SplittingLocalGPChild(LocalGPChild):
             
             #update center
             self.center = torch.mean(self.train_x,dim=0)
+            if self.center.dim()==0:
+                self.center = self.center.unsqueeze(0)
             
             #Update parent's covar_module
-            self.parent.covar_module = self.covar_module
+            if self.parent.inheritKernel:
+                self.parent.covar_module = self.covar_module
             
             return self
         '''

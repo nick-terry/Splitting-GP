@@ -253,9 +253,14 @@ class LocalGPModel:
             M = min(M,len(self.children))
         
         #Update all of the covar modules to the most recent
-        for child in self.children:
-            child.covar_module = self.covar_module
-        
+        if self.inheritKernel:  
+            for child in self.children:
+                child.covar_module = self.covar_module
+        #If not inheriting kernel, then average the lengthscale params of child kernels
+        else:
+            lengthscales = [child.covar_module.lengthscale for child in self.children]
+            self.covar_module.lengthscale = torch.mean(torch.stack(lengthscales),dim=0)
+            
         mean_predictions = []
         var_predictions = []
         
@@ -427,13 +432,16 @@ class LocalGPChild(gpytorch.models.ExactGP):
         if inheritKernel:
             self.covar_module = parent.covar_module
         else:
-            self.covar_module = parent.covar_module.__class__(ard_num_dims=x.shape[1])
+            self.covar_module = parent.covar_module.__class__(ard_num_dims=train_x.shape[1] if train_x.dim()>1 else 1)
         self.lastUpdated = True
         
         '''
         Compute the center as the mean of the training data
         '''
         self.center = torch.mean(train_x,dim=0)
+        if self.center.dim()==0:
+            self.center = self.center.unsqueeze(0)
+        
         self.train_x = train_x
         self.train_y = train_y
         
@@ -448,7 +456,8 @@ class LocalGPChild(gpytorch.models.ExactGP):
     
     def update(self,x,y):
         #Sync covar
-        self.covar_module = self.parent.covar_module
+        if self.parent.inheritKernel:
+            self.covar_module = self.parent.covar_module
         
         #Update train_x, train_y
         self.train_x = torch.cat([self.train_x, x])
@@ -463,6 +472,8 @@ class LocalGPChild(gpytorch.models.ExactGP):
         
         #Update center
         self.center = torch.mean(self.train_x,dim=0)
+        if self.center.dim()==0:
+            self.center = self.center.unsqueeze(0)
         
         return self
     

@@ -27,6 +27,10 @@ def pddp(M):
     #Center the matrix by subtracting centroid
     M0 = M - centroid.repeat((M.shape[0],1))
 
+    #Scale columns by std
+    stdCols = torch.std(M0,dim=0)
+    M0 = M0/stdCols
+
     #Compute the low-rank Singular Value Decomposition of M0
     (U,S,V) = torch.svd(M0)
     

@@ -10,7 +10,7 @@ import pandas as pd
 import UtilityFunctions
 from pathlib import Path
 import os.path
-from math import ceil
+from math import ceil,pi
 
 path = Path().absolute()
 
@@ -78,3 +78,38 @@ def forestfire():
     
     return predictorTrain,responseTrain,predictorTest,responseTest
 
+def onedimsine():
+    
+    predictor = torch.linspace(0,20,steps=1000)
+    response = torch.sin(predictor)+2*torch.cos(predictor+pi/4)+.2*predictor-.1*predictor**2
+    response[:response.shape[0]//2] += torch.randn(response.shape[0]//2)
+    response[response.shape[0]//2:] += torch.randn(response.shape[0]//2)*3
+    torch.manual_seed(41064)
+    
+    indices = torch.multinomial(torch.ones((predictor.shape[0])).float(),ceil(predictor.shape[0]*.5),replacement=True)
+    
+    predictorTrain,responseTrain = predictor[indices],response[indices]
+    complementMask = torch.ones(predictor.shape[0]).bool()
+    complementMask[indices] = False
+    predictorTest,responseTest = predictor[complementMask],response[complementMask]
+    
+    return predictorTrain,responseTrain,predictorTest,responseTest,predictor,response
+
+def onedimstep():
+    
+    predictor = torch.linspace(0,20,steps=1000)
+    response = torch.zeros(predictor.shape)
+    repets = 3
+    for i in range(repets):
+        response[response.shape[0]*2*i//(2*repets):response.shape[0]*(2*i+1)//(2*repets)] = 1
+    
+    torch.manual_seed(41064)
+    
+    indices = torch.multinomial(torch.ones((predictor.shape[0])).float(),ceil(predictor.shape[0]*.5),replacement=True)
+    
+    predictorTrain,responseTrain = predictor[indices],response[indices]
+    complementMask = torch.ones(predictor.shape[0]).bool()
+    complementMask[indices] = False
+    predictorTest,responseTest = predictor[complementMask],response[complementMask]
+    
+    return predictorTrain,responseTrain,predictorTest,responseTest,predictor,response
