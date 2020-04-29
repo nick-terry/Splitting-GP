@@ -5,7 +5,7 @@ Created on Wed Feb 26 12:52:23 2020
 @author: pnter
 """
 from LocalGP import LocalGPModel,LocalGPChild
-from UtilityFunctions import pddp
+from UtilityFunctions import pddp,pddp_piter
 import numpy as np
 import multiprocessing as mp
 import torch

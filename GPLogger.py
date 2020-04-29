@@ -50,6 +50,7 @@ class ExperimentLogger:
         
         logging.debug('Squared Errors: {0}'.format(squaredErrors))
         logging.debug('Local Predictions and Weights:')
+        '''
         for i in range(len(localPredictions)):
             logging.debug('Test Point {0} '.format(i))
             logging.debug('Local Preds: {1}'.format(i,localPredictions[i]))
@@ -57,7 +58,7 @@ class ExperimentLogger:
             #logging.debug('Dists to Children: {1}'.format(i,minDists[i]))
             logging.debug('Prediction {0}: {1}'.format(i,prediction[i]))
             logging.debug('Ground Truth {0}: {1}'.format(i,groundTruth[i]))
-        
+        '''
         #centers = torch.stack(centers)
         
         self.make_data_plot(trainingPoints,fullTestPoints,newTestPoints,centers,prediction,groundTruth)

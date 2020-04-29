@@ -16,7 +16,7 @@ from itertools import product
 #Construct a grid of input points
 gridDims = 50
 x,y = torch.meshgrid([torch.linspace(-5,5,gridDims), torch.linspace(-5,5,gridDims)])
-xyGrid = torch.stack([x,y],dim=2).float()
+xyGrid = torch.stack([x,y],dim=2).double()
 
 def evalModel(w_gen,numSamples,maxChildren0):
     #Set RNG seed

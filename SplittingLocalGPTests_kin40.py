@@ -6,7 +6,7 @@ Created on Sun Feb  9 18:05:26 2020
 es"""
 import time
 import LocalGP
-import SplittingLocalGP,RegularGP
+import SplittingLocalGP,RegularGP,RBCM
 import torch
 import gpytorch
 import matplotlib.pyplot as plt
@@ -17,20 +17,38 @@ import TestData
 import pandas as pd
 
 def getIcethick():
-    predictor,response = TestData.icethick(scale=False)
-    return predictor,response
+    predictor,response,predTest,respTest = TestData.icethick(scale=False)
+    return predictor,response,predTest,respTest
 
 def getKin40():
     predictorsTrain,responseTrain,predictorsTest,responseTest = TestData.kin40()
     return predictorsTrain.double(),responseTrain.double(),predictorsTest.double(),responseTest.double()
 
-predictorsTrain,responseTrain,predictorsTest,responseTest = getKin40()
+def getFires():
+    predictorsTrain,responseTrain,predictorsTest,responseTest = TestData.forestfire()
+    return predictorsTrain.double(),responseTrain.double(),predictorsTest.double(),responseTest.double()
+
+'''
+predictorsTrain,responseTrain,predictorsTest,responseTest = getFires()
+#log10 transform of response
+responseTrain = torch.log10(responseTrain+1)
+'''
+predictorsTrain,responseTrain,predictorsTest,responseTest = getIcethick()
+
 
 def makeModel(kernelClass,likelihood,M,splittingLimit,inheritLikelihood):
         #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
-        model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=8),
+        model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=2),
                                                        splittingLimit=splittingLimit,inheritKernel=True,
-                                                       inheritLikelihood=True,
+                                                       inheritLikelihood=inheritLikelihood,
+                                                       M=M,
+                                                       mean=gpytorch.means.ConstantMean)
+        return model
+
+def makeLocalModel(kernelClass,likelihood,M,w_gen):
+        #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
+        model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=4),
+                                                       w_gen=w_gen,inheritKernel=True,
                                                        M=M,
                                                        mean=gpytorch.means.ZeroMean)
         return model
@@ -38,14 +56,22 @@ def makeModel(kernelClass,likelihood,M,splittingLimit,inheritLikelihood):
 def makeRegularModel(kernelClass,likelihood):
         model = RegularGP.RegularGPModel(likelihood,kernelClass(ard_num_dims=8))
         return model
-    
+   
+def makeRBCMModel(kernelClass,likelihood,k):
+        #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
+        model = RBCM.RobustBayesCommitteeMachine(likelihood,kernelClass(ard_num_dims=8),
+                                                       inheritKernel=True,
+                                                       numChildren=k,
+                                                       mean=gpytorch.means.ZeroMean)
+        return model
+   
 def makeModels(kernelClass,likelihood,w_gen,k):
     models = []
     for i in range(k):
         models.append(makeModel(kernelClass, likelihood, w_gen))
     return models
 
-def evalModel(M=None,splittingLimit=500,inheritLikelihood=True,splitting=True):
+def evalModel(M=None,splittingLimit=500,inheritLikelihood=True,mtype='splitting',w_gen=.5,k=10):
     #Set RNG seed
     torch.manual_seed(42069)
         
@@ -54,14 +80,18 @@ def evalModel(M=None,splittingLimit=500,inheritLikelihood=True,splitting=True):
     likelihood = gpytorch.likelihoods.GaussianLikelihood
     
     
-    if splitting:
+    if mtype=='splitting':
         model = makeModel(kernel,likelihood,M,splittingLimit,inheritLikelihood)
+    elif mtype=='local':
+        model = makeLocalModel(kernel,likelihood,M,w_gen=w_gen)
+    elif mtype=='rbcm':
+        model = makeRBCMModel(kernel,likelihood,k)
     else:
         model = makeRegularModel(kernel,likelihood)
         
     t0 = time.time()
     j = 0
-    if splitting:
+    if mtype=='splitting':
         for index in range(int(predictorsTrain.shape[0]))[::splittingLimit]:
             #We don't want to overshoot the number of obs...
             upperIndex = min(index+splittingLimit,int(predictorsTrain.shape[0]))
@@ -70,6 +100,26 @@ def evalModel(M=None,splittingLimit=500,inheritLikelihood=True,splitting=True):
             model.update(x_train,y_train)
             print(j)
             j += 1
+    
+    elif mtype=='local':
+        for index in range(int(predictorsTrain.shape[0])):
+            
+            x_train = predictorsTrain[index].unsqueeze(0)
+            y_train = responseTrain[index].unsqueeze(0)
+            model.update(x_train,y_train)
+            print(j)
+            j += 1
+            
+    elif mtype=='rbcm':
+        for index in range(int(predictorsTrain.shape[0]))[::100]:
+            #We don't want to overshoot the number of obs...
+            upperIndex = min(index+100,int(predictorsTrain.shape[0]))
+            x_train = predictorsTrain[index:upperIndex]
+            y_train = responseTrain[index:upperIndex]
+            model.update(x_train,y_train)
+            print(j)
+            j += 1
+    
     else:
         model.update(predictorsTrain,responseTrain)
 
@@ -85,14 +135,15 @@ def evalModel(M=None,splittingLimit=500,inheritLikelihood=True,splitting=True):
     return model,t1-t0
 
 def evalgptModel():
-    train_x = predictorsTrain
-    train_y = responseTrain
+    
+    train_x = predictorsTrain.double()
+    train_y = responseTrain.double()
     class ExactGPModel(gpytorch.models.ExactGP):
         
         def __init__(self, train_x, train_y, likelihood):
             super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
             self.mean_module = gpytorch.means.ZeroMean()
-            self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel(ard_num_dims=8))
+            self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel(ard_num_dims=10))
     
         def forward(self, x):
             mean_x = self.mean_module(x)
@@ -103,6 +154,8 @@ def evalgptModel():
     
     model = ExactGPModel(train_x, train_y, likelihood)
     likelihood = model.likelihood
+    model.double()
+    likelihood.double()
     model.train()
     likelihood.train()
     model.train_inputs = (torch.cat([model.train_inputs[0], predictorsTrain]),)
@@ -114,7 +167,8 @@ def evalgptModel():
     
     # "Loss" for GPs - the marginal log likelihood
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
-    training_iter = 50
+    mll.double()
+    training_iter = 25
     for i in range(training_iter):
         # Zero gradients from previous iteration
         optimizer.zero_grad()
@@ -131,32 +185,111 @@ def evalgptModel():
 
     return model
 
+#Splitting
+#kin40
+'''
+paramsList = [{'M':1,'splittingLimit':70,'inheritLikelihood':False,'mtype':'splitting'},
+              {'M':1,'splittingLimit':156,'inheritLikelihood':False,'mtype':'splitting'},
+              {'M':1,'splittingLimit':625,'inheritLikelihood':False,'mtype':'splitting'},
+              {'M':1,'splittingLimit':2500,'inheritLikelihood':False,'mtype':'splitting'},
+              {'M':1,'splittingLimit':5000,'inheritLikelihood':False,'mtype':'splitting'},
+              {'M':1,'splittingLimit':9999,'inheritLikelihood':False,'mtype':'splitting'}]
+'''
 
-paramsList = [{'M':1,'splittingLimit':70,'inheritLikelihood':True,'splitting':True},
-              {'M':1,'splittingLimit':156,'inheritLikelihood':True,'splitting':True},
-              {'M':1,'splittingLimit':625,'inheritLikelihood':True,'splitting':True},
-              {'M':1,'splittingLimit':2500,'inheritLikelihood':True,'splitting':True},
-              {'M':1,'splittingLimit':5000,'inheritLikelihood':True,'splitting':True},
-              {'M':1,'splittingLimit':9999,'inheritLikelihood':True,'splitting':True}]
+#icethk
 
+paramsList = [{'M':1,'splittingLimit':1000,'inheritLikelihood':False,'mtype':'splitting'}]
+'''
+              {'M':1,'splittingLimit':156,'inheritLikelihood':False,'mtype':'splitting'},
+              {'M':1,'splittingLimit':625,'inheritLikelihood':False,'mtype':'splitting'},
+              {'M':1,'splittingLimit':2500,'inheritLikelihood':False,'mtype':'splitting'},
+              {'M':1,'splittingLimit':5000,'inheritLikelihood':False,'mtype':'splitting'},
+              {'M':1,'splittingLimit':9999,'inheritLikelihood':False,'mtype':'splitting'}]
+'''
 
-#paramsList = [{'M':None,'splittingLimit':50,'inheritLikelihood':True,'splitting':True}]
+#Fires
 
+'''
+paramsList = [{'M':1,'splittingLimit':100,'inheritLikelihood':True,'mtype':'splitting'},
+              {'M':1,'splittingLimit':75,'inheritLikelihood':True,'mtype':'splitting'},
+              {'M':1,'splittingLimit':50,'inheritLikelihood':True,'mtype':'splitting'},
+              {'M':1,'splittingLimit':25,'inheritLikelihood':True,'mtype':'splitting'},
+              {'M':1,'splittingLimit':10,'inheritLikelihood':True,'mtype':'splitting'}]
+'''
+
+#RBCM
+
+'''
+paramsList = [{'M':1,'k':10,'inheritLikelihood':True,'mtype':'rbcm'},
+              {'M':1,'k':128,'inheritLikelihood':True,'mtype':'rbcm'},
+              {'M':1,'k':64,'inheritLikelihood':True,'mtype':'rbcm'},
+              {'M':1,'k':32,'inheritLikelihood':True,'mtype':'rbcm'},
+              {'M':1,'k':16,'inheritLikelihood':True,'mtype':'rbcm'},
+              {'M':1,'k':1,'inheritLikelihood':True,'mtype':'rbcm'}]
+'''
+
+'''
+paramsList = [{'M':1,'w_gen':.001,'inheritLikelihood':True,'mtype':'local'},
+              {'M':1,'w_gen':.0005,'inheritLikelihood':True,'mtype':'local'},
+              {'M':1,'w_gen':.0001,'inheritLikelihood':True,'mtype':'local'},
+              {'M':1,'w_gen':.00005,'inheritLikelihood':True,'mtype':'local'},
+              {'M':1,'w_gen':.000001,'inheritLikelihood':True,'mtype':'local'},
+              {'M':1,'w_gen':.0000005,'inheritLikelihood':True,'mtype':'local'},
+              {'M':1,'w_gen':.0000001,'inheritLikelihood':True,'mtype':'local'},
+              {'M':1,'w_gen':.00000005,'inheritLikelihood':True,'mtype':'local'},
+              {'M':1,'w_gen':.00000001,'inheritLikelihood':True,'mtype':'local'},
+              {'M':1,'w_gen':.000000005,'inheritLikelihood':True,'mtype':'local'}]
+'''
+
+'''
+t0 = time.time()
+model = evalgptModel()
+t1 = time.time()
+model.eval()
+model.likelihood.eval()
+
+preds = model.likelihood(model(predictorsTest)).mean
+preds = torch.max(10**preds-1,torch.zeros(preds.shape).double())
+rmse = torch.sqrt(torch.mean((preds-responseTest)**2))
+mad = torch.mean(torch.abs(preds-responseTest))
+df = pd.DataFrame()
+df['params'] = 'full gp'
+df['time'] = t1-t0
+df['rmse'] = rmse.detach().numpy()
+df['mad'] = mad.detach().numpy()
+df.to_csv('fires_results_gp.csv')
+'''
+
+#paramsList = [{'M':1,'w_gen':.0001,'inheritLikelihood':True,'mtype':'local'}]
+
+#paramsList = [{'M':None,'splittingLimit':75,'inheritLikelihood':True,'mtype':'splitting'}]
+
+madArr = torch.zeros((len(paramsList),1))
 resultsArr = torch.zeros((len(paramsList),1))
 timeArr = torch.zeros((len(paramsList),1))
 
-for i in range(len(paramsList)):
-    model,deltaT = evalModel(**paramsList[i])    
-    preds = model.predict(predictorsTest)
-    rmse = torch.sqrt(torch.mean((preds-responseTest)**2))
-    resultsArr[i] = rmse
-    timeArr[i] = deltaT
+#may need to update the max iterations here to prevent numerical issues with rbcm
+with gpytorch.settings.max_cg_iterations(20000):
+    for i in range(len(paramsList)):
+        model,deltaT = evalModel(**paramsList[i])
+        if paramsList[i]['mtype']=='rbcm':    
+            preds,variances = model.predict(predictorsTest)
+        else:
+            preds = model.predict(predictorsTest)
+        #preds = torch.max(10**preds-1,torch.zeros(preds.shape).double())
+        rmse = torch.sqrt(torch.mean((preds-responseTest)**2))
+        mad = torch.mean(torch.abs(preds-responseTest))
+        resultsArr[i] = rmse
+        timeArr[i] = deltaT
+        madArr[i] = mad
 
 df = pd.DataFrame()
 df['params'] = paramsList
 df['time'] = timeArr.detach().numpy()
 df['rmse'] = resultsArr.detach().numpy()
-df.to_csv('kin40_results_splitting.csv')
+df['mad'] = madArr.detach().numpy()
+df.to_csv('icethk_results_splitting.csv')
+
 
 '''
 #Define a common scale for color mapping for contour plots

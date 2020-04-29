@@ -15,6 +15,7 @@ class CommitteeMember(gpytorch.models.ExactGP):
     def __init__(self, parent, train_x, train_y):
         
         likelihood = parent.likelihoodFn()
+        likelihood.double()
         
         super(CommitteeMember, self).__init__(train_x, train_y, likelihood)
         
@@ -56,7 +57,7 @@ class CommitteeMember(gpytorch.models.ExactGP):
         
             beta = .5*torch.log(self.varStarStar/var)
         
-            return mean,var,beta
+            return posteriorDist,beta
     
     def initTraining(self):
         #Switch to training mode
@@ -66,6 +67,7 @@ class CommitteeMember(gpytorch.models.ExactGP):
         #Setup optimizer
         self.optimizer = torch.optim.Adam(self.parameters(), lr=0.1)
         mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self)
+        mll.double()
         
         #Perform training iterations
         for i in range(self.parent.training_iter):
@@ -94,7 +96,7 @@ class CommitteeMember(gpytorch.models.ExactGP):
     '''
     def update(self,x,y):
         self.train_x = torch.cat([self.train_x,x],dim=0)
-        self.train_y = torch.cat([self.train_y,y],dim=0)
+        self.train_y = torch.cat([self.train_y.unsqueeze(-1),y],dim=0).squeeze()
         
         self.train_inputs = (self.train_x,)
         self.train_targets = self.train_y

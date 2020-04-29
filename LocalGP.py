@@ -112,11 +112,42 @@ class LocalGPModel:
         else:
             closestChildIndex,minDist = self.getClosestChild(x)
             
+            #Get the mask of any points for which the closest model is not similar enough
+            genNewModelIndices = (minDist < self.w_gen) if minDist.dim()>0 else (minDist < self.w_gen).unsqueeze(0)
+            
+            x_gen = x[genNewModelIndices,:]
+            y_gen = y[genNewModelIndices]
+            
+            #Now generate a new model, if needed. 
+            if x_gen.shape[0] > 0:
+                
+                self.createChild(x_gen[0,:].unsqueeze(0), y_gen[0].unsqueeze(0))
+                
+                #We then recursively call update() without the point which generated 
+                #the model and return, in case some points would be assigned the newly generated model
+                if x.shape[0] > 1:
+                    x_minus = torch.cat([x[0:genNewModelIndices[0]], x[genNewModelIndices[0]:]])
+                    y_minus = torch.cat([y[0:genNewModelIndices[0]], y[genNewModelIndices[0]:]])
+                
+                    self.update(x_minus,y_minus)
+                
+                return
+                
+                
+            
+            
+            #Get points where we are not generating a new model
+            x_assign = x[genNewModelIndices.bitwise_not()]
+            y_assign = y[genNewModelIndices.bitwise_not()]
+            
+            closestIndex_assign = closestChildIndex[genNewModelIndices.bitwise_not()]\
+                if closestChildIndex.dim()>0 else closestChildIndex.unsqueeze(0)[genNewModelIndices.bitwise_not()]
+            
             #loop over children and assign them the new data points
             for childIndex in range(len(self.children)):
                 #Get the data which are closest to the current child
-                x_child = x[closestChildIndex==childIndex].squeeze(0)
-                y_child = y[closestChildIndex==childIndex].squeeze(0)
+                x_child = x_assign[closestIndex_assign==childIndex].squeeze(0)
+                y_child = y_assign[closestIndex_assign==childIndex].squeeze(0)
                 
                 #If new data is a singleton, unsqueeze the 0th dim
                 if x_child.dim() == 1:
@@ -132,8 +163,10 @@ class LocalGPModel:
                     newChildModel = closestChildModel.update(x_child,y_child)
                 
                     #Replace the existing model with the new model which incorporates new data
-                    self.children[closestChildIndex] = newChildModel
-    
+                    self.children[closestIndex_assign] = newChildModel
+            
+            
+            
         
     '''
     Instantiate a new child model using the training pair {x,y}
@@ -237,6 +270,15 @@ class LocalGPModel:
         mean_predictions = torch.stack(mean_predictions).transpose(0,1)
         var_predictions = torch.stack(var_predictions).transpose(0,1)
         
+        #Squeeze out any extra dims that may have accumulated
+        if mean_predictions.dim()>2:
+            mean_predictions = mean_predictions.squeeze()
+            var_predictions = var_predictions.squeeze()
+        
+        #Transpose to agree with minIndices dims
+        mean_predictions = mean_predictions
+        var_predictions = var_predictions
+    
         #We don't need this weighting procedure if there is only one child
         if mean_predictions.shape[-1]>1:
             #Get the covar matrix
@@ -278,36 +320,7 @@ class LocalGPModel:
         else:
             weighted_mean_predictions = mean_predictions
             weighted_var_predictions = var_predictions
-        '''
-        #If x is a tensor with dimension d1 x d2 x ... x dk x n, iterate over the extra dims and predict at each point
-        #Create a 2D list which ranges over all values for each input dimension
-        dimRangeList = [list(range(dimSize)) for dimSize in x.shape[:-1]]
-        
-        #Take a cross product to get all possible coordinates in the inputs
-        inputDimIterator = itertools.product(*dimRangeList)
-        
-        #Initialize tensor of zeros to store predictions
-        predictions = torch.zeros(size=(*x.shape[:-1],self.outputDim))
-        
-        if individualPredictions:
-            individualList = []
-            weightsList = []
-            minDistsList = []
-        
-        for inputIndices in inputDimIterator:
-            results = self.predictAtPoint(x[inputIndices].unsqueeze(0),M,individualPredictions)
-            
-            if individualPredictions:
-                predictions[inputIndices] = results[0]
-                individualList.append(results[1])
-                weightsList.append(results[2])
-                minDistsList.append(results[3])
-            else:
-                predictions[inputIndices] = results
-        
-        if individualPredictions:
-            return predictions,individualList,weightsList,minDistsList
-        '''
+
         if getVar:
             return weighted_mean_predictions,weighted_var_predictions
         else:
@@ -414,7 +427,7 @@ class LocalGPChild(gpytorch.models.ExactGP):
         if inheritKernel:
             self.covar_module = parent.covar_module
         else:
-            self.covar_module = copy.deepcopy(parent.covar_module)
+            self.covar_module = parent.covar_module.__class__(ard_num_dims=x.shape[1])
         self.lastUpdated = True
         
         '''
@@ -433,60 +446,6 @@ class LocalGPChild(gpytorch.models.ExactGP):
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
     
-    '''
-    Update the child model to incorporate the training pair {x,y}
-    '''
-    '''
-    def update(self,x,y):
-        if self.prediction_strategy is None:
-            self.predict(x)
-        
-        
-        #If this was the last child to be updated, or inheritKernel=False, we can do a fantasy update
-        #without updating the covar cache. Otherwise, we can update the covar_module from the parent
-        
-        if not self.lastUpdated and self.parent.inheritKernel:
-                self.covar_module = self.parent.covar_module
-                self.predict(x)
-        
-        #Sometimes get an error when attempting Cholesky decomposition.
-        #In this case, refit a new model.
-        
-        try:
-            
-            updatedModel = self.get_fantasy_model(inputs=x, targets=y)
-        
-        except RuntimeError as e:
-            print('Error during Cholesky decomp for fantasy update. Fitting new model...')
-            
-            newInputs = torch.cat([self.train_x,x],dim=0)
-            newTargets = torch.cat([self.train_y,y],dim=0)
-            updatedModel = LocalGPChild(newInputs,newTargets,self.parent,
-                                        inheritKernel=self.parent.inheritKernel)
-        
-        except RuntimeWarning as e:
-            print('Error during Cholesky decomp for fantasy update. Fitting new model...')
-            
-            newInputs = torch.cat([self.train_x,x],dim=0)
-            newTargets = torch.cat([self.train_y,y],dim=0)
-            updatedModel = LocalGPChild(newInputs,newTargets,self.parent,
-                                        inheritKernel=self.parent.inheritKernel)
-        
-        #Update the data properties
-        updatedModel.train_x = updatedModel.train_inputs[0]
-        updatedModel.train_y = updatedModel.train_targets
-        
-        #Compute the center of the new model
-        updatedModel.center = torch.mean(updatedModel.train_inputs[0],dim=0)
-        
-        #Update parent's covar_module
-        self.parent.covar_module = self.covar_module
-        
-        #Need to perform a prediction so that get_fantasy_model may be used to update later
-        updatedModel.predict(x)
-        
-        return updatedModel
-    '''
     def update(self,x,y):
         #Sync covar
         self.covar_module = self.parent.covar_module

@@ -24,20 +24,68 @@ def pddp(M):
     #Compute the centroid of the observed data
     centroid = torch.mean(M,dim=0)
     
-    #Compute covariance matrix M0 by subtracting the centroid from the rows of M
+    #Center the matrix by subtracting centroid
     M0 = M - centroid.repeat((M.shape[0],1))
-    
-    #Compute the Singular Value Decomposition of M0
-    (U,S,V) = torch.svd(M0.T)
+
+    #Compute the low-rank Singular Value Decomposition of M0
+    (U,S,V) = torch.svd(M0)
     
     #Take vector product of principal direction with rows of covar matrix
-    M1 = torch.sum(M0 * U[0],dim=1)
+    M1 = torch.sum(M0 * V[:,0],dim=1)
     
-    #Assign a cluster label based on product of the rows of the covar matrix with the principal direction
+    #Assign a cluster label based on product of the rows of the matrix with the principal direction
     labels = torch.where(M1>0,torch.ones(M1.shape[0]),torch.zeros(M1.shape[0]))
     
     #print('Split labels" {0}'.format(labels))
     return labels
+
+'''
+Compute one iteration of the Principal Direction Divisive Partitioning algorithm using power iteration to get principal direction
+
+Arguments:
+    
+    M -- the matrix (torch tensor) on which the iteration will be performed
+    
+Returns:
+    
+    labels -- labels for each row of M which correspond to the clusters to which
+        each row is assigned
+'''
+def pddp_piter(M):
+    
+    #Compute the centroid of the observed data
+    centroid = torch.mean(M,dim=0)
+    
+    #Center the matrix by subtracting centroid
+    M = M - centroid.repeat((M.shape[0],1))
+
+    
+    M0 = M.transpose(0,1).matmul(M)
+    
+    #Generate random unit vector to iterate on
+    x = torch.rand((M.shape[1],1)).double()
+    x0 = x
+    
+    x = M0.matmul(x)
+    
+    #Iterate until approximate convergence
+    for i in range(100):
+        if torch.sum(x0/torch.norm(x0)*x/torch.norm(x)) < 10**-3:
+            break
+            
+        M0 = M0.transpose(0,1).matmul(M0)
+        x = M0.matmul(x)
+        x0 = x
+        
+    #Take vector product of principal direction with rows of matrix
+    M1 = torch.sum(M*x.transpose(0,1),dim=1)
+    
+    #Assign a cluster label based on product of the rows of the matrix with the principal direction
+    labels = torch.where(M1>0,torch.ones(M1.shape[0]),torch.zeros(M1.shape[0]))
+    
+    #print('Split labels" {0}'.format(labels))
+    return labels
+
 
 '''
 Compute the Bayesian Information criterion for the given Likelihood and number of samples

@@ -6,17 +6,17 @@ Created on Fri Apr 17 19:37:52 2020
 """
 
 
-import LocalGP_Kfold_Crossvalidation_TestData
-from LocalGP_Kfold_Crossvalidation_TestData import makeExactModels,makeLocalGPModels,makeSplittingLocalGPModels
+import LocalGP_Kfold_Crossvalidation
+from LocalGP_Kfold_Crossvalidation import makeExactModels,makeLocalGPModels,makeSplittingLocalGPModels
 import GPLogger
 import time
 import gpytorch
 import TestData
 import torch
 
-modelType = 'splitting'
+modelType = 'local'
 maxSamples = 100
-params = {'splittingLimit':300}
+params = {'w_gen':.1}
 replications = 1
 folds=5
 
@@ -61,9 +61,11 @@ elif modelType=='splitting':
     
 replicateArgsList = [(replicate, seed, maxSamples, predictor, response, modelType, getModelsFunction) for replicate,seed in zip(replicates,seeds)]
     
-#results = LocalGP_Kfold_Crossvalidation_TestData.runReplicate(0, seeds[0], maxSamples, predictor, response, modelType, getModelsFunction)
+#results = LocalGP_Kfold_Crossvalidation.runReplicate(0, seeds[0], maxSamples, predictor, response, modelType, getModelsFunction)
 
 def start():
     if __name__ == "__main__":
-        results = LocalGP_Kfold_Crossvalidation_TestData.runCrossvalidationExperiment(**kwargs)
+        results = LocalGP_Kfold_Crossvalidation.runCrossvalidationExperiment(**kwargs)
     return results
+
+res = start()

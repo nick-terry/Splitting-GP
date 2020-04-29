@@ -145,7 +145,7 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,mode
         mse = torch.sum(torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2),dim=list(range(prediction.dim())))/(numSamples/k)
        
          #If the MSE is very high or nan, log some key info to debug
-        if(mse>100 or mse!=mse):
+        if(False and (mse>100 or mse!=mse)):
             newTestPairs = completeRandIndices[:,newlyWithheldPoints]
             newTestPoints = xyGrid[newTestPairs[0,:],newTestPairs[1,:]].unsqueeze(0)    
             trainingData = []
@@ -293,9 +293,9 @@ def runCrossvalidationExperiment(modelType,**kwargs):
         
     #Construct a grid of input points
     gridDims = kwargs['gridDims'] if 'gridDims' in kwargs else 100
-    scale = 5
+    scale = 1
     x,y = torch.meshgrid([torch.linspace(-scale,scale,gridDims), torch.linspace(-scale,scale,gridDims)])
-    xyGrid = torch.stack([x,y],dim=2).float()
+    xyGrid = torch.stack([x,y],dim=2).double()
     
     #Evaluate a function to approximate
     '''
@@ -305,6 +305,7 @@ def runCrossvalidationExperiment(modelType,**kwargs):
     z = (5*torch.sin((xyGrid[:,:,0]/scale)**2+((2*xyGrid[:,:,1])/scale)**2)+3*xyGrid[:,:,0]/scale).reshape((gridDims,gridDims,1))
     z -= torch.mean(z)
     z += torch.randn(z.shape) * torch.max(z) * .05
+    z = z.double()
     
     #Set # of folds for cross-validation
     k = kwargs['folds'] if 'folds' in kwargs else 5
@@ -334,12 +335,15 @@ def runCrossvalidationExperiment(modelType,**kwargs):
         def getModelsFunction(): return makeRBCMModels(kernel, likelihood, params['numChildren'], k)
     
     #Create multiprocessing pool for each replicate needed
-    pool = mp.Pool(replications)
+    #pool = mp.Pool(replications)
     
     replicateArgsList = [(replicate, seed, gridDims, maxSamples, xyGrid, z, modelType) for replicate,seed in zip(replicates,seeds)]
-    results = pool.starmap(runReplicate,replicateArgsList)
+    #results = pool.starmap(runReplicate,replicateArgsList)
+    results = []
+    for replicate in range(replications):
+        results.append(runReplicate(*replicateArgsList[replicate]))
     
-    pool.close()
+    #pool.close()
     
     #Convert results dicts into dataframes, then merge
     experimentDF = pd.concat(list(map(lambda resultDict:resultsToDF(resultDict, modelType, params),results)))

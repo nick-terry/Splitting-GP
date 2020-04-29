@@ -14,7 +14,7 @@ from math import ceil
 
 path = Path().absolute()
 
-def icethick(full=False,scale=True,project=False):
+def icethick(full=False,scale=False,project=False):
     df = pd.read_csv('ICETHK.csv')
     if full:
         return df
@@ -43,7 +43,14 @@ def icethick(full=False,scale=True,project=False):
             x[:,1] = x[:,1]/torch.max(torch.abs(x[:,1]))
             y = y/torch.max(y) #Scale down for regression
         
-        return x,y
+        indices = torch.multinomial(torch.ones((x.shape[0])).float(),ceil(x.shape[0]*.8),replacement=False)
+        
+        predictorTrain,responseTrain = x[indices],y[indices]
+        complementMask = torch.ones(x.shape[0]).bool()
+        complementMask[indices] = False
+        predictorTest,responseTest = x[complementMask],y[complementMask]
+    
+        return predictorTrain,responseTrain,predictorTest,responseTest
 
 def kin40():
     trainInputs = torch.tensor(pd.read_fwf('kin40k_train_inputs.txt',header=None).to_numpy()).float()
@@ -51,22 +58,23 @@ def kin40():
     trainLabels = torch.tensor(pd.read_fwf('kin40k_train_labels.txt',header=None).to_numpy()).squeeze().float()
     testLabels = torch.tensor(pd.read_fwf('kin40k_test_labels.txt',header=None).to_numpy()).squeeze().float()
     
-
-    
     return trainInputs,trainLabels,testInputs,testLabels
 
-def protein():
+def forestfire():
     
-    df = pd.read_csv('CASP.csv')
+    df = pd.read_csv('forestfires.csv')
     
-    predictor = torch.tensor(df[['F1','F2','F3','F4','F5','F6','F7','F8','F9']].to_numpy())
-    response = torch.tensor(df['RMSD'].to_numpy())
+    predictor = torch.tensor(df[['X','Y','FFMC','DMC','DC','ISI','temp','RH','wind','rain']].to_numpy())
+    response = torch.tensor(df['area'].to_numpy())
     
     torch.manual_seed(41064)
     
-    indices = torch.multinomial(torch.ones((predictor.shape[0])).float(),ceil(predictor.shape[0]*.8),replacement=False)
-
+    indices = torch.multinomial(torch.ones((predictor.shape[0])).float(),ceil(predictor.shape[0]*.9),replacement=False)
     
-    return predictor,response
+    predictorTrain,responseTrain = predictor[indices],response[indices]
+    complementMask = torch.ones(predictor.shape[0]).bool()
+    complementMask[indices] = False
+    predictorTest,responseTest = predictor[complementMask],response[complementMask]
+    
+    return predictorTrain,responseTrain,predictorTest,responseTest
 
-protein()

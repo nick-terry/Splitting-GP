@@ -39,7 +39,7 @@ def getSummaryStats(df):
 df = loadFiles()
 
 series = {}
-models = ['splitting','exact','rbcm']
+models = ['splitting','rbcm','exact']
 #models = ['splitting']
 metrics = ['avg_mse','avg_memory_usage','avg_training_time']
 ylabels = ['MSE','Memory Usage (Kb)','Training Time (sec)']
@@ -63,7 +63,7 @@ for model in models:
         
 observations_vals = df['observations'].unique()[:25]
 #observations_vals = df['observations'].unique()
-
+'''
 for metric,ylabel in zip(metrics,ylabels):
     fig = plt.figure()
     ax = fig.add_subplot(111)
@@ -77,27 +77,89 @@ for metric,ylabel in zip(metrics,ylabels):
         if metric=='avg_mse':
             ax.set_ylim(bottom=0,top=6)
         ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.7)
-    '''
+    
     mean = series[metric]['mean'][0]
     cihw = series[metric]['cihw'][0]
     ax.plot(observations_vals,mean,'-o')
     ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.5)
-    '''
+    
     
     ax.legend(models)
     ax.set_title(metric)
     ax.set_ylabel(ylabel)
     ax.set_xlabel('# Observations')
-    #ax.axvline(1200,color='orange')
 '''
-for metric in ['avg_mse']:
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    ax.plot(observations_vals[:-4],series[metric][0][:-4],'-o',
-            observations_vals[:-4],series[metric][1][:-4],'-o',
-            observations_vals[:-4],series[metric][2][:-4],'-o')
-    ax.legend(models)
-    ax.set_title(metric)
-    ax.set_ylabel('MSE')
-    ax.set_xlabel('# Observations')
+metric = 'avg_mse'
+fig = plt.figure()
+ax = fig.add_subplot(111)
+    
+for index in range(len(series[metric]['mean'])):
+    
+    mean = series[metric]['mean'][index][:25]
+    cihw = series[metric]['cihw'][index][:25]
+    
+    ax.plot(observations_vals,mean,'-o')
+    if metric=='avg_mse':
+        ax.set_ylim(bottom=0,top=6)
+    ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.7)
 '''
+mean = series[metric]['mean'][0]
+cihw = series[metric]['cihw'][0]
+ax.plot(observations_vals,mean,'-o')
+ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.5)
+'''
+
+ax.legend(['splitting','rbcm','full GP'])
+ax.set_ylabel('MSE')
+ax.set_xlabel('Number of Observations')
+plt.savefig('synthetic_mse.png',dpi=300)
+
+metric = 'avg_memory_usage'
+fig = plt.figure()
+ax = fig.add_subplot(111)
+    
+for index in range(len(series[metric]['mean'])):
+    
+    mean = series[metric]['mean'][index][:25]
+    cihw = series[metric]['cihw'][index][:25]
+    
+    ax.plot(observations_vals,mean,'-o')
+    if metric=='avg_mse':
+        ax.set_ylim(bottom=0,top=6)
+    ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.7)
+'''
+mean = series[metric]['mean'][0]
+cihw = series[metric]['cihw'][0]
+ax.plot(observations_vals,mean,'-o')
+ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.5)
+'''
+
+ax.legend(['splitting','rbcm','full GP'])
+ax.set_ylabel('Memory Usage (kB)')
+ax.set_xlabel('Number of Observations')
+plt.savefig('synthetic_mem.png',dpi=300)
+
+metric = 'avg_training_time'
+fig = plt.figure()
+ax = fig.add_subplot(111)
+    
+for index in range(len(series[metric]['mean'])):
+    
+    mean = series[metric]['mean'][index][:25]
+    cihw = series[metric]['cihw'][index][:25]
+    
+    ax.plot(observations_vals,mean,'-o')
+    if metric=='avg_mse':
+        ax.set_ylim(bottom=0,top=6)
+    ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.7)
+'''
+mean = series[metric]['mean'][0]
+cihw = series[metric]['cihw'][0]
+ax.plot(observations_vals,mean,'-o')
+ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.5)
+'''
+
+ax.legend(['splitting','rbcm','full GP'])
+ax.set_ylabel('Training Time (sec)')
+ax.set_xlabel('Number of Observations')
+plt.savefig('synthetic_traintime.png',dpi=300)

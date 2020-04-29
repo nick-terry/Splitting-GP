@@ -54,19 +54,46 @@ class RobustBayesCommitteeMachine():
         self.children.append(CommitteeMember.CommitteeMember(self, x, y))
         
     '''
-    Update the committee machine with a new (x,y) pair
+    Update the committee machine with a new (x,y)
     '''
     def update(self,x,y):
+        if y.dim()==1:
+            y = y.unsqueeze(-1)
         #If we haven't created the desired # of children, make a new one
         if len(self.children) < self.numChildren:
-            self.createChild(x, y)
+            self.createChild(x[0,:].unsqueeze(0), y[0,:])
             
             #Keep track of this child's data
             self.childrenNumData.append(1)
             
-        else: 
+            #Recursively update until we have enough children
+            if x.shape[0] > 1:
+                self.update(x[1:,:],y[1:,:])
+            
+            return
+            
+        else:
+            #Generate a U(0,1) random vector, then scale to the number of children
+            assignments = torch.floor(torch.rand((x.shape[0],1))*self.numChildren)
+            
+            for i in range(self.numChildren):
+                child = self.children[i]
+                
+                assignToChild = (assignments==i)
+                
+                if torch.sum(assignToChild) > 0:
+                    assignToChild = assignToChild.squeeze()
+                    x_assign = x[assignToChild]
+                    y_assign = y[assignToChild]
+                    
+                    y_assign = y_assign if y_assign.dim()>1 else y_assign.unsqueeze(0)
+                
+                    child.update(x_assign,y_assign)
+              
             '''
-            #We assume that we originally assigned the data via uniform randomness acros the children. Now choose the child with the smallest data set.
+            #We assume that we originally assigned the data via uniform randomness across
+            the children. Now choose the child with the smallest data set.
+            '''
             '''
             childToUpdateIndex = self.nextChildToUpdate
             
@@ -81,6 +108,7 @@ class RobustBayesCommitteeMachine():
             
             #Compute next child to update mod max # children
             self.nextChildToUpdate = self.nextChildToUpdate + 1 if self.nextChildToUpdate < self.numChildren-1 else 0
+            '''
     
     def setChildLastUpdated(self,child):
         for _child in self.children:
@@ -90,7 +118,39 @@ class RobustBayesCommitteeMachine():
     '''
     Predict at the points in x by soliciting (weighted) predictions from each child model
     '''
-    def predict(self,x,individualPredictions=False):    
+    def predict(self,x,individualPredictions=False):  
+       
+        #Update all of the covar modules to the most recent
+        for child in self.children:
+            child.covar_module = self.covar_module
+        
+        mean_predictions = []
+        var_predictions = []
+        betas_predictions = []
+        
+        #Get the predictions of each child at each point
+        for child in self.children:
+            prediction,betas = child.predict(x)
+            
+            mean_predictions.append(prediction.mean)
+            var_predictions.append(prediction.variance)
+            betas_predictions.append(betas)
+            
+        #Concatenate into pytorch tensors
+        mean_predictions = torch.stack(mean_predictions).transpose(0,1)
+        var_predictions = torch.stack(var_predictions).transpose(0,1)
+        betas = torch.stack(betas_predictions).transpose(0,1)
+        
+        #Compute the committee's predictive var
+        predVar = (1.0/(torch.sum(betas/var_predictions,dim=1) + (1-torch.sum(betas,dim=1))/self.varStarStar)).unsqueeze(-1)
+        
+        #Compute the committee's predictive mean
+        predMean = torch.sum(mean_predictions/var_predictions*betas,dim=1).unsqueeze(-1)*predVar
+        
+        return predMean,predVar
+        
+    '''
+        ########################################################
         #Update all of the covar modules to the most recent
         for child in self.children:
             child.covar_module = self.covar_module
@@ -127,7 +187,7 @@ class RobustBayesCommitteeMachine():
         
         else:
             return predictions
-    
+    '''
     '''
     Predict at a point x by soliciting a (weighted) prediction from each child model
     ''' 
