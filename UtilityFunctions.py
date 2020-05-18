@@ -6,6 +6,7 @@ Created on Mon Mar  2 15:58:59 2020
 """
 
 import torch
+import numpy as np
 
 '''
 Compute one iteration of the Principal Direction Divisive Partitioning algorithm.
@@ -19,7 +20,7 @@ Returns:
     labels -- labels for each row of M which correspond to the clusters to which
         each row is assigned
 '''
-def pddp(M):
+def pddp(M,direction=False):
     
     #Compute the centroid of the observed data
     centroid = torch.mean(M,dim=0)
@@ -41,6 +42,8 @@ def pddp(M):
     labels = torch.where(M1>0,torch.ones(M1.shape[0]),torch.zeros(M1.shape[0]))
     
     #print('Split labels" {0}'.format(labels))
+    if direction:
+        return labels,V[:,0]
     return labels
 
 '''
@@ -90,6 +93,12 @@ def pddp_piter(M):
     #print('Split labels" {0}'.format(labels))
     return labels
 
+'''
+Randomly labels data points as 0/1 with equal prob
+'''
+def randomLabels(M):
+    labels = torch.where(torch.rand(M.shape[0])>=.5,torch.ones(M.shape[0]),torch.zeros(M.shape[0]))
+    return labels
 
 '''
 Compute the Bayesian Information criterion for the given Likelihood and number of samples

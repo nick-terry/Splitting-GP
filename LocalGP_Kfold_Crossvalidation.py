@@ -21,7 +21,7 @@ import GPLogger
 import time
 
 #Set some gpytorch settings
-gpytorch.settings.fast_computations.covar_root_decomposition = False
+gpytorch.settings.fast_computations.covar_root_decomposition(False)
 
 
 def makeExactModel(kernelClass,likelihood,inheritKernel=True,fantasyUpdate=True):
@@ -140,12 +140,15 @@ def kFoldCrossValidation(modelsList,numSamples,completeRandIndices,xyGrid,z,mode
             prediction,localPredictions,localWeights = results[0],results[1],results[2]
         else:
             prediction,localPredictions,localWeights,minDists = results[0],results[1],results[2],results[3]
-    
+            #prediction = results[0]
+            
         predictions.append(prediction)
-        mse = torch.sum(torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2),dim=list(range(prediction.dim())))/(numSamples/k)
-       
+        
+        #mse = torch.sum(torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2),dim=list(range(prediction.dim())))/(numSamples/k)
+        mse = torch.sum(torch.pow(prediction-z[randPairs[0,:],randPairs[1,:]],2))/(numSamples/k)
+        print('mse shape: {0}'.format(mse.shape))
          #If the MSE is very high or nan, log some key info to debug
-        if(False and (mse>100 or mse!=mse)):
+        if(mse>100 or mse!=mse):
             newTestPairs = completeRandIndices[:,newlyWithheldPoints]
             newTestPoints = xyGrid[newTestPairs[0,:],newTestPairs[1,:]].unsqueeze(0)    
             trainingData = []

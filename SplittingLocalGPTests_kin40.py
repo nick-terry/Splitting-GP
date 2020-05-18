@@ -6,10 +6,11 @@ Created on Sun Feb  9 18:05:26 2020
 es"""
 import time
 import LocalGP
-import SplittingLocalGP,RegularGP,RBCM
+import SplittingLocalGP,RegularGP#,RBCM
 import torch
 import gpytorch
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
 import numpy as np
 from itertools import product
 from math import inf
@@ -28,6 +29,10 @@ def getFires():
     predictorsTrain,responseTrain,predictorsTest,responseTest = TestData.forestfire()
     return predictorsTrain.double(),responseTrain.double(),predictorsTest.double(),responseTest.double()
 
+def getPowergen(seed):
+    predictorsTrain,responseTrain,predictorsTest,responseTest = TestData.powergen(seed)
+    return predictorsTrain.double(),responseTrain.double(),predictorsTest.double(),responseTest.double()
+
 def getSine():
     predictorsTrain,responseTrain,predictorsTest,responseTest,predictor,response = TestData.onedimsine()
     return predictorsTrain.double(),responseTrain.double(),predictorsTest.double(),responseTest.double(),predictor.double(),response.double()
@@ -41,12 +46,16 @@ predictorsTrain,responseTrain,predictorsTest,responseTest = getFires()
 #log10 transform of response
 responseTrain = torch.log10(responseTrain+1)
 '''
-predictorsTrain,responseTrain,predictorsTest,responseTest,predictor,response = getStep()
+'''
+predictorsTrain,responseTrain,predictorsTest,responseTest,predictor,response = getSine()
+'''
+
+#predictorsTrain,responseTrain,predictorsTest,responseTest = getPowergen()
 
 
 def makeModel(kernelClass,likelihood,M,splittingLimit,inheritLikelihood):
         #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
-        model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=1),
+        model = SplittingLocalGP.SplittingLocalGPModel(likelihood,kernelClass(ard_num_dims=4),
                                                        splittingLimit=splittingLimit,inheritKernel=True,
                                                        inheritLikelihood=inheritLikelihood,
                                                        M=M,
@@ -58,7 +67,7 @@ def makeLocalModel(kernelClass,likelihood,M,w_gen):
         model = LocalGP.LocalGPModel(likelihood,kernelClass(ard_num_dims=4),
                                                        w_gen=w_gen,inheritKernel=True,
                                                        M=M,
-                                                       mean=gpytorch.means.ZeroMean)
+                                                       mean=gpytorch.means.ConstantMean)
         return model
 
 def makeRegularModel(kernelClass,likelihood):
@@ -158,7 +167,7 @@ def evalgptModel():
         def __init__(self, train_x, train_y, likelihood):
             super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
             self.mean_module = gpytorch.means.ZeroMean()
-            self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel(ard_num_dims=10))
+            self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel(ard_num_dims=4))
     
         def forward(self, x):
             mean_x = self.mean_module(x)
@@ -183,7 +192,7 @@ def evalgptModel():
     # "Loss" for GPs - the marginal log likelihood
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
     mll.double()
-    training_iter = 25
+    training_iter = 50
     for i in range(training_iter):
         # Zero gradients from previous iteration
         optimizer.zero_grad()
@@ -202,6 +211,7 @@ def evalgptModel():
 
 #Splitting
 #kin40
+
 '''
 paramsList = [{'M':1,'splittingLimit':70,'inheritLikelihood':False,'mtype':'splitting'},
               {'M':1,'splittingLimit':156,'inheritLikelihood':False,'mtype':'splitting'},
@@ -211,9 +221,24 @@ paramsList = [{'M':1,'splittingLimit':70,'inheritLikelihood':False,'mtype':'spli
               {'M':1,'splittingLimit':9999,'inheritLikelihood':False,'mtype':'splitting'}]
 '''
 
-#icethk
+'''
+paramsList = [{'M':1,'splittingLimit':70,'inheritLikelihood':False,'mtype':'splitting'},
+              {'M':None,'splittingLimit':70,'inheritLikelihood':False,'mtype':'splitting'}]
+'''
 
-paramsList = [{'M':None,'splittingLimit':501,'inheritLikelihood':True,'mtype':'splitting'}]
+#icethk
+'''
+paramsList = [{'M':None,'splittingLimit':10000,'inheritLikelihood':True,'mtype':'splitting'},
+              {'M':None,'splittingLimit':5000,'inheritLikelihood':True,'mtype':'splitting'},
+              {'M':None,'splittingLimit':2500,'inheritLikelihood':True,'mtype':'splitting'},
+              {'M':None,'splittingLimit':1250,'inheritLikelihood':True,'mtype':'splitting'},
+              {'M':None,'splittingLimit':625,'inheritLikelihood':True,'mtype':'splitting'},
+              {'M':None,'splittingLimit':300,'inheritLikelihood':True,'mtype':'splitting'}]
+'''
+
+paramsList = [{'M':None,'splittingLimit':10000,'inheritLikelihood':True,'mtype':'splitting'}]
+
+
 '''
               {'M':1,'splittingLimit':156,'inheritLikelihood':False,'mtype':'splitting'},
               {'M':1,'splittingLimit':625,'inheritLikelihood':False,'mtype':'splitting'},
@@ -243,17 +268,13 @@ paramsList = [{'M':1,'k':10,'inheritLikelihood':True,'mtype':'rbcm'},
               {'M':1,'k':1,'inheritLikelihood':True,'mtype':'rbcm'}]
 '''
 
+#Local
+
+#best so far for powergen is 1e-44
 '''
-paramsList = [{'M':1,'w_gen':.001,'inheritLikelihood':True,'mtype':'local'},
-              {'M':1,'w_gen':.0005,'inheritLikelihood':True,'mtype':'local'},
-              {'M':1,'w_gen':.0001,'inheritLikelihood':True,'mtype':'local'},
-              {'M':1,'w_gen':.00005,'inheritLikelihood':True,'mtype':'local'},
-              {'M':1,'w_gen':.000001,'inheritLikelihood':True,'mtype':'local'},
-              {'M':1,'w_gen':.0000005,'inheritLikelihood':True,'mtype':'local'},
-              {'M':1,'w_gen':.0000001,'inheritLikelihood':True,'mtype':'local'},
-              {'M':1,'w_gen':.00000005,'inheritLikelihood':True,'mtype':'local'},
-              {'M':1,'w_gen':.00000001,'inheritLikelihood':True,'mtype':'local'},
-              {'M':1,'w_gen':.000000005,'inheritLikelihood':True,'mtype':'local'}]
+paramsList = [{'M':None,'w_gen':1*10**-48,'inheritLikelihood':True,'mtype':'local'},
+              {'M':None,'w_gen':1*10**-49,'inheritLikelihood':True,'mtype':'local'},
+              {'M':None,'w_gen':1*10**-50,'inheritLikelihood':True,'mtype':'local'}]
 '''
 
 '''
@@ -264,55 +285,85 @@ model.eval()
 model.likelihood.eval()
 
 preds = model.likelihood(model(predictorsTest)).mean
-preds = torch.max(10**preds-1,torch.zeros(preds.shape).double())
 rmse = torch.sqrt(torch.mean((preds-responseTest)**2))
 mad = torch.mean(torch.abs(preds-responseTest))
 df = pd.DataFrame()
-df['params'] = 'full gp'
-df['time'] = t1-t0
-df['rmse'] = rmse.detach().numpy()
-df['mad'] = mad.detach().numpy()
-df.to_csv('fires_results_gp.csv')
+df['params'] = ['full gp']
+df['time'] = [t1-t0]
+df['rmse'] = [rmse.detach().numpy()]
+df['mad'] = [mad.detach().numpy()]
+df.to_csv('powergen_results_gp.csv')
 '''
 
 #paramsList = [{'M':1,'w_gen':.0001,'inheritLikelihood':True,'mtype':'local'}]
 
 #paramsList = [{'M':None,'splittingLimit':75,'inheritLikelihood':True,'mtype':'splitting'}]
 
-madArr = torch.zeros((len(paramsList),1))
-resultsArr = torch.zeros((len(paramsList),1))
-timeArr = torch.zeros((len(paramsList),1))
+#Number of replications to perform. Only necessary to do >1 if randomized
+numReps = 1
 
+#Create seeds
+torch.manual_seed(41064)
+seeds = torch.ceil(torch.rand((numReps,1))*100000).long()
+
+madArr = torch.zeros((len(paramsList)*numReps,1))
+resultsArr = torch.zeros((len(paramsList)*numReps,1))
+timeArr = torch.zeros((len(paramsList)*numReps,1))
+repArr = torch.arange(numReps).repeat_interleave(len(paramsList))
+
+#predictorsTrain,responseTrain,predictorsTest,responseTest,predictor,response = getSine()
+fig = plt.figure()
+ax = fig.subplots(2)
 #may need to update the max iterations here to prevent numerical issues with rbcm
 with gpytorch.settings.max_cg_iterations(20000):
     for i in range(len(paramsList)):
-        model,deltaT = evalModel(**paramsList[i])
-        if paramsList[i]['mtype']=='rbcm':    
-            preds,variances = model.predict(predictorsTest)
-        else:
-            preds = model.predict(predictorsTest)
-        #preds = torch.max(10**preds-1,torch.zeros(preds.shape).double())
-        rmse = torch.sqrt(torch.mean((preds-responseTest)**2))
-        mad = torch.mean(torch.abs(preds-responseTest))
-        resultsArr[i] = rmse
-        timeArr[i] = deltaT
-        madArr[i] = mad
+        for rep in range(numReps):
+            seed = seeds[rep]
+            predictorsTrain,responseTrain,predictorsTest,responseTest = getPowergen(seed)
+            
+            
+            model,deltaT = evalModel(**paramsList[i])
+            if paramsList[i]['mtype']=='rbcm':    
+                preds,variances = model.predict(predictorsTest)
+            else:
+                preds = model.predict(predictorsTest)
+            
+            rmse = torch.sqrt(torch.mean((preds-responseTest)**2))
+            print(rmse)
+            mad = torch.mean(torch.abs(preds-responseTest))
+            resultsArr[i+rep*len(paramsList)] = rmse
+            timeArr[i+rep*len(paramsList)] = deltaT
+            madArr[i+rep*len(paramsList)] = mad
 
-fig = plt.figure()
-ax = fig.subplots(1)
-ax.plot(predictor,response,predictor,(model.predict(predictor)).detach())
-centers = model.getCenters()
-ax.scatter(centers,torch.zeros(centers.shape),color='green')
-ax.scatter(predictorsTrain,responseTrain,color='yellow')
 
+        '''
+        #ax.plot(predictor,response,alpha=.8)
+        ax[i].plot(predictor,(model.predict(predictor)).detach(),color='orange',linewidth=2,
+                path_effects=[pe.Stroke(linewidth=3, foreground='black'),pe.Normal()])
+        centers = model.getCenters()
+        ax[i].scatter(centers,torch.zeros(centers.shape),color='yellow',edgecolor='black',zorder=15)
+        ax[i].scatter(predictorsTrain,responseTrain,color='blue',alpha=.3)
+        #ax.set_title('splittingLimit={0}'.format(paramsList[i]['splittingLimit']))
+        ax[i].axis('off')
+        if paramsList[i]['splittingLimit'] == 70:
+            plt.savefig('discontinuity.png',dpi=300)
 '''
+#create dataframe for storing experiment results
+
 df = pd.DataFrame()
-df['params'] = paramsList
+
+concatParams = []
+for rep in range(numReps):
+    concatParams += paramsList
+
+df['params'] = concatParams
 df['time'] = timeArr.detach().numpy()
 df['rmse'] = resultsArr.detach().numpy()
 df['mad'] = madArr.detach().numpy()
-df.to_csv('icethk_results_splitting.csv')
-'''
+df['replication'] = repArr.detach().numpy()
+
+#df.to_csv('powergen_results_local_10reps.csv')
+
 
 '''
 #Define a common scale for color mapping for contour plots

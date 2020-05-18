@@ -1,229 +1,232 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Apr 17 10:06:03 2020
+Created on Fri Jan 23 08:16:55 2015
 
-@author: pnter
+@author: marc
 """
-import torch
-import gpytorch
-import itertools
-import CommitteeMember
-import time
-'''
-Implements the Robust Bayesian Committee Machine described in Deisenroth and Ng, 2015
-'''
 
-class RobustBayesCommitteeMachine():
-    
-    '''
-    likelihoodFn: the likelihood distribution of child models. Default is Gaussian per the paper.
-    
-    kernel: covariance function. Default is RBF w/ no ARD. Note that in the paper ARD is used, but we need to specify the number of dims to enable.
-    '''
-    def __init__(self, likelihoodFn=gpytorch.likelihoods.GaussianLikelihood, kernel=gpytorch.kernels.RBFKernel, **kwargs):
-            
-        #Default output dimension is 1 (scalar)
-        self.outputDim = 1 if 'outputDim' not in kwargs else kwargs['outputDim']
-        
-        self.likelihoodFn = likelihoodFn
-        
-        self.covar_module = kernel
-            
-        # of children to use
-        self.numChildren = kwargs['numChildren'] if 'numChildren' in kwargs else 10    
-    
-        #This will contain the child models
-        self.children = []
-        
-        #Track number of data points given to each child
-        self.childrenNumData = []
-        
-        # Number of gradient descent iterations to use for optimization of child models
-        self.training_iter = 100
-        
-        #We will take a N(0,1) prior, so set RBCM var to unity
-        self.varStarStar = 1
-        
-        #Track the index of the next child to update
-        self.nextChildToUpdate = 0
-        
-    '''
-    Create a child model. This will continue with each data added, until we reach the desired # of children
-    '''
-    def createChild(self,x,y):
-        self.children.append(CommitteeMember.CommitteeMember(self, x, y))
-        
-    '''
-    Update the committee machine with a new (x,y)
-    '''
-    def update(self,x,y):
-        if y.dim()==1:
-            y = y.unsqueeze(-1)
-        #If we haven't created the desired # of children, make a new one
-        if len(self.children) < self.numChildren:
-            self.createChild(x[0,:].unsqueeze(0), y[0,:])
-            
-            #Keep track of this child's data
-            self.childrenNumData.append(1)
-            
-            #Recursively update until we have enough children
-            if x.shape[0] > 1:
-                self.update(x[1:,:],y[1:,:])
-            
-            return
-            
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Jan 20 17:29:15 2015
+
+@author: marc
+"""
+
+import pdb
+from random import shuffle
+from multiprocessing import Pool, cpu_count
+from functools import reduce
+
+import numpy as np
+from scipy import linalg, optimize
+
+import cov
+from GP import GP, GP_NLML_wrapper, GP_predict_wrapper
+from DataSet import DataSet
+from dgp import DGP
+from dgp import gPoE
+from dgp import PoE
+
+class rBCM(GP):
+
+    def __init__(self,X,y,cov_type='covSEard',
+                 profile=[(4,'kd_partition','rep2')]*2,
+                 pool='default'):
+
+        # architecture of the DGP is specified by a list of tuples
+        # the i-th tuple in the list represents the specification of a DGP
+        # node at the i-th level (where level 0 is the root/top)
+        # each tuple has the form (c,pmethod,cmethod)
+        # where: c denotes the number of child GPs
+        #        pmethod denotes the method used to partition the training data
+        #        cmethod denotes the method used to combine the partitions
+
+        # the argument pool can be a Pool object from the multiprocessing
+        # library. If 'default', a Pool will be created, otherwise, the DGP
+        # will be utilise single threaded computation
+        if pool == 'default':
+            self.pool = Pool(cpu_count())
         else:
-            #Generate a U(0,1) random vector, then scale to the number of children
-            assignments = torch.floor(torch.rand((x.shape[0],1))*self.numChildren)
-            
-            for i in range(self.numChildren):
-                child = self.children[i]
-                
-                assignToChild = (assignments==i)
-                
-                if torch.sum(assignToChild) > 0:
-                    assignToChild = assignToChild.squeeze()
-                    x_assign = x[assignToChild]
-                    y_assign = y[assignToChild]
-                    
-                    y_assign = y_assign if y_assign.dim()>1 else y_assign.unsqueeze(0)
-                
-                    child.update(x_assign,y_assign)
-              
-            '''
-            #We assume that we originally assigned the data via uniform randomness across
-            the children. Now choose the child with the smallest data set.
-            '''
-            '''
-            childToUpdateIndex = self.nextChildToUpdate
-            
-            
-            childToUpdate = self.children[childToUpdateIndex]
-            
-            childToUpdate.update(x,y)
-            
-            self.childrenNumData[childToUpdateIndex] += 1
-            
-            self.setChildLastUpdated(childToUpdate)
-            
-            #Compute next child to update mod max # children
-            self.nextChildToUpdate = self.nextChildToUpdate + 1 if self.nextChildToUpdate < self.numChildren-1 else 0
-            '''
-    
-    def setChildLastUpdated(self,child):
-        for _child in self.children:
-            _child.lastUpdated = False
-        child.lastUpdated = True
-    
-    '''
-    Predict at the points in x by soliciting (weighted) predictions from each child model
-    '''
-    def predict(self,x,individualPredictions=False):  
-       
-        #Update all of the covar modules to the most recent
-        for child in self.children:
-            child.covar_module = self.covar_module
-        
-        mean_predictions = []
-        var_predictions = []
-        betas_predictions = []
-        
-        #Get the predictions of each child at each point
-        for child in self.children:
-            prediction,betas = child.predict(x)
-            
-            mean_predictions.append(prediction.mean)
-            var_predictions.append(prediction.variance)
-            betas_predictions.append(betas)
-            
-        #Concatenate into pytorch tensors
-        mean_predictions = torch.stack(mean_predictions).transpose(0,1)
-        var_predictions = torch.stack(var_predictions).transpose(0,1)
-        betas = torch.stack(betas_predictions).transpose(0,1)
-        
-        #Compute the committee's predictive var
-        predVar = (1.0/(torch.sum(betas/var_predictions,dim=1) + (1-torch.sum(betas,dim=1))/self.varStarStar)).unsqueeze(-1)
-        
-        #Compute the committee's predictive mean
-        predMean = torch.sum(mean_predictions/var_predictions*betas,dim=1).unsqueeze(-1)*predVar
-        
-        return predMean,predVar
-        
-    '''
-        ########################################################
-        #Update all of the covar modules to the most recent
-        for child in self.children:
-            child.covar_module = self.covar_module
-        
-        #If x is a tensor with dimension d1 x d2 x ... x dk x n, iterate over the extra dims and predict at each point
-        #Create a 2D list which ranges over all values for each input dimension
-        dimRangeList = [list(range(dimSize)) for dimSize in x.shape[:-1]]
-        
-        #Take a cross product to get all possible coordinates in the inputs
-        inputDimIterator = itertools.product(*dimRangeList)
-        
-        #Initialize tensor of zeros to store predictions
-        predictions = torch.zeros(size=(*x.shape[:-1],self.outputDim))
-        
-        if individualPredictions:
-            individualList = []
-            weightsList = []
-            minDistsList = []
-        
-        #Get individual predictions for each point
-        for inputIndices in inputDimIterator:
-            results = self.predictAtPoint(x[inputIndices].unsqueeze(0),individualPredictions)
-            
-            if individualPredictions:
-                predictions[inputIndices] = results[0]
-                individualList.append(results[1])
-                weightsList.append(results[2])
-                
+            self.pool = pool
+
+        self.X = X # training inputs, 2d array
+        self.y = y # training outputs, 1d array
+        self.cov_type = cov_type # string specifying covariance function
+
+        # initialise all log params to 0
+        if self.cov_type == 'covSEiso':
+            self.params = np.asarray([0.0]*3)
+            self.params[-1] = np.log(0.01)
+        elif self.cov_type == 'covSEard':
+            self.params = np.asarray([0.0]*(self.input_dim+2))
+            self.params[0:self.input_dim] = np.log(np.std(X,axis=0)/2.0)
+            self.params[-2] = np.log(np.var(y,axis=0))
+            self.params[-1] = self.params[-2]-np.log(10)
+
+        # build the rBCM
+        self.build(profile)
+
+    def build(self,profile):
+
+        # construct the DGP based on the given profile
+
+        # construction rule at the current level
+        current_level = profile[0]
+        c, pmethod, cmethod = current_level
+
+        # construction rule for the next levels
+        next_levels = profile[1:]
+
+        # set up a DataSet object
+        data = DataSet(self.X,self.y)
+
+        # split data according to the partitioning method
+        partitions = data.partition(c, pmethod)
+
+        # recombine data
+        if cmethod.startswith('rep'):
+            # rep<n> = number of partitions per subset
+            k = int(cmethod[3:])
+
+            assert k <= c # k == c implies duplication of the full GP c times
+
+            # shuffle the partitions
+            shuffle(partitions)
+
+            # partition assignment
+            # child GP  |
+            #        1  | 1,2,...k
+            #        2  | 2,3,...k+1
+            #        3  | 3,4,...k+2
+
+            self.children = []
+
+            for i in range(c):
+                l, u = i,i+k
+                if u < c:
+                    selected_parts = partitions[l:u]
+                elif u >= c:
+                    selected_parts = partitions[l:] + partitions[:u-c]
+
+                subset = reduce(DataSet.join,selected_parts)
+
+                #print l,u, len(selected_parts), subset.size
+                #pdb.set_trace()
+
+                if len(next_levels) == 0: # GP at the leaves
+                    child = GP(subset.X,subset.y,cov_type=self.cov_type)
+                else:
+                    if len(next_levels) == 1: # 2nd level must be a gPoE
+                        child = gPoE.gPoE(subset.X,subset.y,cov_type=self.cov_type,
+                                profile=next_levels,pool=self.pool)
+                    else: # all other levels must be PoEs (DGPs)
+                        child = PoE.PoE(subset.X,subset.y,cov_type=self.cov_type,
+                                profile=next_levels,pool=self.pool)
+
+                self.children.append(child)
+
+    def NLML(self,params=None,derivs=False):
+
+        # computes the NLML, = mean of children NLML
+
+        params = self.params if params is None else params
+
+        if self.pool == None or self.height > 1:
+            NLMLs = [ c.NLML(params,derivs) for c in self.children ]
+        else:
+            arglist = zip(self.children,
+                          [params]*self.nchild,
+                          [derivs]*self.nchild)
+            NLMLs = self.pool.map_async(GP_NLML_wrapper,arglist).get()
+
+        return reduce(lambda a,b: a+b, NLMLs)/float(self.nchild)
+
+    def predict(self,Xp,variance=False,latent_variance=False,entropy=False):
+        for c in self.children:  # make sure everybody has the same parameters
+            c.params = self.params
+            if hasattr(self, 'beta'):
+              c.beta = self.beta
             else:
-                predictions[inputIndices] = results
-        
-        if individualPredictions:
-            return predictions,individualList,weightsList
-        
+              try:
+                del c.beta
+              except:
+                pass
+        if self.pool == None or self.height > 1:
+            args = Xp, False, True, True
+            predictions = [ c.predict(*args) for c in self.children ]
         else:
-            return predictions
-    '''
-    '''
-    Predict at a point x by soliciting a (weighted) prediction from each child model
-    ''' 
-    def predictAtPoint(self,x,individualPredictions=False):
+            # predictions at the leaves (GP experts)
+            arglist = zip(self.children,
+                          [Xp]*self.nchild,
+                          [False]*self.nchild,
+                          [True]*self.nchild,
+                          [True]*self.nchild)
+            predictions = self.pool.map_async(GP_predict_wrapper,arglist).get()
+
+        # child-GPs mean predictions, latent variance and entropy
+        predictions_ymu = [ p[0] for p in predictions ]
+        predictions_fs2 = [ p[1] for p in predictions ]
+        betaChildren = [ p[2] for p in predictions ]
+
+        # collect mean/variance/betas from children
+        preds = np.vstack(predictions_ymu).T
+        S2 = np.vstack(predictions_fs2).T
+        betaChildren = np.vstack(betaChildren).T
+        if self.height == 1: # do a gPoE step
+          S2 = S2/betaChildren
         
-        childPredictions = torch.zeros((len(self.children),1))
-        childBetas = torch.zeros((len(self.children),1))
-        childVars = torch.zeros((len(self.children),1))
-        
-        #Get the predictive mean and var for each child, along with betas
-        for i in range(len(self.children)):
+        # compute precision
+        precrBCM = np.sum(1.0/S2,axis=1)
+        if hasattr(self, 'correction'): 
+          if self.correction: # incorporate the prior (BCM and rBCM)
+            precrBCM += (1.0-np.sum(betaChildren,axis=1))/np.exp(self.params[-2])
             
-            child = self.children[i]
-            childResults = child.predict(x)
-            #Switch to double precision for this critical computation
-            childPredictions[i],childVars[i],childBetas[i] = [results.double() for results in childResults]
-            
-            
-        #Compute the committee's predictive var
-        predVar = 1.0/(torch.sum(childBetas/childVars) + (1-torch.sum(childBetas))/self.varStarStar)
-        
-        #Compute the committee's predictive mean
-        predMean = torch.sum(childPredictions/childVars*childBetas)*predVar
-        
-        if individualPredictions:
-            return predMean,childPredictions,childBetas
-        
+        else: # gPoE and PoE (depending on the setting of beta)
+          precrBCM += (1.0-np.sum(betaChildren,axis=1))/np.exp(self.params[-2])
+
+        # compute mean and variance
+        SrBCM = 1.0/precrBCM
+        ymu = SrBCM*np.sum(preds/S2,axis=1)
+        ###########
+
+
+        output = (ymu,)
+
+        if variance or latent_variance:
+
+            fs2 = SrBCM
+
+            if variance:
+                ys2 = fs2 + np.exp(self.params[-1])
+                output += (ys2,)
+
+            if latent_variance:
+                output +=  (fs2,)
+
+            if entropy:
+                prior_variance = np.exp(self.params[-2])
+#                prior_variance = cov.cov(self.cov_type,Xp,Xp,
+#                                         self.params[:-1],diag=True)
+                # prior_variance = np.asarray(prior_variance).squeeze()
+                tcov = prior_variance - fs2
+                output += (tcov,)
+
+        return output[0] if len(output) == 1 else output
+
+    @property
+    def nchild(self):
+        return len(self.children)
+
+    @property
+    def nleaf(self):
+        if type(self.children[0]) is GP:
+            return self.nchild
         else:
-            return predMean
-    
-            
-            
-        
-        
+            return reduce(lambda a,b: a+b,[ c.nleaf for c in self.children ])
 
-
-
-
-        
+    @property
+    def height(self):
+        if type(self.children[0]) is GP:
+            return 1
+        else:
+            return self.children[0].height + 1

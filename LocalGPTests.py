@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import ArtistAnimation
 import numpy as np
 from itertools import product
+from math import inf
 
 #Construct a grid of input points
 gridDims = 50
@@ -34,7 +35,6 @@ def evalModel(w_gen,numSamples,maxChildren0):
     k = 5
     kernel = gpytorch.kernels.RBFKernel
     likelihood = gpytorch.likelihoods.GaussianLikelihood
-    w_gen = .5
     
     def makeModel(kernelClass,likelihood,w_gen):
         #Note: ard_num_dims=2 permits each input dimension to have a distinct hyperparameter
@@ -61,13 +61,14 @@ def evalModel(w_gen,numSamples,maxChildren0):
         j += 1
     t1 = time.time()
     print('Done training')
+    model.predict(xyGrid[randIndices[0,:],randIndices[1,:]])
     return t1-t0
 
-maxChildrenVals = [3,4]
-numSamplesVals = [100,200,300,400,500,600,700,800,900, 1000,1200,1300,2000]
+maxChildrenVals = [inf,inf]
+numSamplesVals = [100,200]
 runtimes = {}
 for maxChildren,numSamples in product(maxChildrenVals,numSamplesVals):
-    runtimes[(maxChildren,numSamples)] = evalModel(.5,numSamples,maxChildren)
+    runtimes[(maxChildren,numSamples)] = evalModel(.2,numSamples,maxChildren)
 
 '''
 #Predict over the whole grid for plotting

@@ -78,6 +78,28 @@ def forestfire():
     
     return predictorTrain,responseTrain,predictorTest,responseTest
 
+#We want to be able to pass a seed here so we can use CRNG
+def powergen(seed=41064,scale=False):
+    
+    df = pd.read_csv('power_gen.csv')
+    
+    predictor = torch.tensor(df[['temperature','vaccuum','ambient_pressure','relative_humidity']].to_numpy())
+    if scale:
+        pred_mean = torch.mean(predictor,dim=0)
+        predictor /= pred_mean
+    response = torch.tensor(df['power_output'].to_numpy())
+    
+    torch.manual_seed(seed)
+    
+    indices = torch.multinomial(torch.ones((predictor.shape[0])).float(),ceil(predictor.shape[0]*.9),replacement=False)
+    
+    predictorTrain,responseTrain = predictor[indices],response[indices]
+    complementMask = torch.ones(predictor.shape[0]).bool()
+    complementMask[indices] = False
+    predictorTest,responseTest = predictor[complementMask],response[complementMask]
+    
+    return predictorTrain,responseTrain,predictorTest,responseTest
+
 def onedimsine():
     
     predictor = torch.linspace(0,20,steps=1000)
@@ -86,7 +108,7 @@ def onedimsine():
     response[response.shape[0]//2:] += torch.randn(response.shape[0]//2)*3
     torch.manual_seed(41064)
     
-    indices = torch.multinomial(torch.ones((predictor.shape[0])).float(),ceil(predictor.shape[0]*.5),replacement=True)
+    indices = torch.multinomial(torch.ones((predictor.shape[0])).float(),ceil(predictor.shape[0]*.2),replacement=True)
     
     predictorTrain,responseTrain = predictor[indices],response[indices]
     complementMask = torch.ones(predictor.shape[0]).bool()
@@ -113,3 +135,5 @@ def onedimstep():
     predictorTest,responseTest = predictor[complementMask],response[complementMask]
     
     return predictorTrain,responseTrain,predictorTest,responseTest,predictor,response
+
+df = powergen()

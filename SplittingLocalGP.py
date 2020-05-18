@@ -5,7 +5,7 @@ Created on Wed Feb 26 12:52:23 2020
 @author: pnter
 """
 from LocalGP import LocalGPModel,LocalGPChild
-from UtilityFunctions import pddp,pddp_piter
+from UtilityFunctions import pddp,randomLabels
 import numpy as np
 import multiprocessing as mp
 import torch
@@ -155,7 +155,7 @@ class SplittingLocalGPChild(LocalGPChild):
         self.train_targets = self.train_y
         
         #Check if the new data puts the child past splitting threshold
-        if self.train_x.shape[0] >= self.parent.splittingLimit:
+        if self.train_x.shape[0] >= self.parent.splittingLimit*2**(len(self.parent.children)-1):
             print('Splitting a local child model...')
             return self.split()
         

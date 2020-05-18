@@ -39,7 +39,7 @@ def getSummaryStats(df):
 df = loadFiles()
 
 series = {}
-models = ['splitting','rbcm','exact']
+models = ['splitting','rbcm','local','exact']
 #models = ['splitting']
 metrics = ['avg_mse','avg_memory_usage','avg_training_time']
 ylabels = ['MSE','Memory Usage (Kb)','Training Time (sec)']
@@ -100,7 +100,7 @@ for index in range(len(series[metric]['mean'])):
     
     ax.plot(observations_vals,mean,'-o')
     if metric=='avg_mse':
-        ax.set_ylim(bottom=0,top=6)
+        ax.set_ylim(bottom=0,top=20)
     ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.7)
 '''
 mean = series[metric]['mean'][0]
@@ -109,7 +109,7 @@ ax.plot(observations_vals,mean,'-o')
 ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.5)
 '''
 
-ax.legend(['splitting','rbcm','full GP'])
+ax.legend(['splitting','rbcm','local','full GP'])
 ax.set_ylabel('MSE')
 ax.set_xlabel('Number of Observations')
 plt.savefig('synthetic_mse.png',dpi=300)
@@ -134,7 +134,7 @@ ax.plot(observations_vals,mean,'-o')
 ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.5)
 '''
 
-ax.legend(['splitting','rbcm','full GP'])
+ax.legend(['splitting','rbcm','local','full GP'])
 ax.set_ylabel('Memory Usage (kB)')
 ax.set_xlabel('Number of Observations')
 plt.savefig('synthetic_mem.png',dpi=300)
@@ -159,7 +159,7 @@ ax.plot(observations_vals,mean,'-o')
 ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.5)
 '''
 
-ax.legend(['splitting','rbcm','full GP'])
+ax.legend(['splitting','rbcm','local','full GP'])
 ax.set_ylabel('Training Time (sec)')
 ax.set_xlabel('Number of Observations')
 plt.savefig('synthetic_traintime.png',dpi=300)
