@@ -7,17 +7,11 @@ Created on Fri Feb  7 10:57:53 2020
 
 import torch
 import gpytorch
-
-from gpytorch.utils.broadcasting import _mul_broadcast_shape
 from gpytorch.utils.memoize import add_to_cache, is_in_cache
 from gpytorch.lazy.root_lazy_tensor import RootLazyTensor
-
-import numpy as np
-import itertools
 import copy
-from math import inf,ceil,log
-
 from UtilityFunctions import updateInverseCovarWoodbury
+from math import inf
 
 '''
 Implements the Local Gaussian Process Regression Model as described by Nguyen-tuong et al.
@@ -28,8 +22,6 @@ Parameters:
     likelihoodFn: The function which, when called, instantiates a new likelihood of the type which should be used for all child models
     kernel: The kernel function used to construct the covariances matrices
     w_gen: The threshold distance for generation of a new child model
-
-More docstring here
 
 '''
 class LocalGPModel:
@@ -45,7 +37,7 @@ class LocalGPModel:
         #Number of training iterations used each time child model is updated
         #This should be roughly proportional to the number of observations.
         #By default, we will use 30. As number of data goes up, this may increase
-        self.training_iter = 500
+        self.training_iter = 30
         
         #Default output dimension is 1 (scalar)
         self.outputDim = 1 if 'outputDim' not in kwargs else kwargs['outputDim']
@@ -70,38 +62,10 @@ class LocalGPModel:
             self.M = kwargs['M']
         else:
             self.M = None
-    '''
-    Update the LocalGPModel with a pair {x,y}. x may be n-dimensional, y is scalar
-    '''
-    def update(self,x,y):
-        #If no child model have been created yet, instantiate a new child with {x,y} and record the output dimension
-        if len(self.children)==0:
-            self.createChild(x,y)
-            self.outputDim = int(y.shape[-1])
             
-        #If child models exist, find the the child whose center is closest to x
-        else:
-            closestChildIndex,minDist = self.getClosestChild(x)
-            
-            #Check if the closest child is farther away than child model generation threshold,
-            #or if the max number of children has already been generated
-            if float(minDist) > self.w_gen or len(self.children) >= self.maxChildren:
-                
-                closestChildModel = self.children[closestChildIndex]
-                #Create a new model which additionally incorporates the pair {x,y}
-                newChildModel = closestChildModel.update(x,y)            
-                
-                #Set other child to be last updated
-                self.setChildLastUpdated(newChildModel)
-                
-                #Replace the existing model with the new model which incorporates new data
-                self.children[closestChildIndex] = newChildModel
-                del closestChildModel
-                
-            else:
-                #Since the distance from x to the nearest child model is greater than w_gen, create a new child model centered at x
-                self.createChild(x,y)
-    
+    '''
+    Update the LocalGPModel with a pair {x,y}.
+    '''   
     def update(self, x, y):
         #If no child model have been created yet, instantiate a new child with {x,y} and record the output dimension
         if len(self.children)==0:
@@ -133,9 +97,6 @@ class LocalGPModel:
                 
                 return
                 
-                
-            
-            
             #Get points where we are not generating a new model
             x_assign = x[genNewModelIndices.bitwise_not()]
             y_assign = y[genNewModelIndices.bitwise_not()]
@@ -286,7 +247,8 @@ class LocalGPModel:
             var_predictions = var_predictions.unsqueeze(-1)
         
         #Transpose to agree with minIndices dims
-        #Note: Don't tranpose for some other experiments...
+        #Note: This only needs to be done for the incremental experiments where we track memory usage.
+        #Leave this commented out otherwise
         '''
         mean_predictions = mean_predictions.transpose(0,1)
         var_predictions = var_predictions.transpose(0,1)
@@ -296,13 +258,6 @@ class LocalGPModel:
         if mean_predictions.shape[-1]>1:
             #Get the covar matrix
             distances = self.getDistanceToCenters(x)
-            
-            '''
-            #take a power equal to log of number of children
-            distances = distances**log(len(self.children))
-            '''
-            
-            #distances = distances/torch.sqrt(var_predictions)
             
             #Get the M closest child models. Need to squeeze out extra dims of 1.
             sortResults = torch.sort(distances.squeeze(-1).squeeze(-1),descending=True)
@@ -316,8 +271,7 @@ class LocalGPModel:
             
             #Get the associate predictions
             gatherDim = 1 if mean_predictions.dim()>1 else 0
-            print(minIndices.shape)
-            print(mean_predictions.shape)
+            
             mean_predictions = mean_predictions.gather(gatherDim,minIndices)
             var_predictions = var_predictions.gather(gatherDim,minIndices)
             
@@ -330,14 +284,12 @@ class LocalGPModel:
             
             #Sum the m smallest distances for each prediction point to normalize
             denominator = torch.sum(minDists,dim=1).unsqueeze(-1).repeat((1,minDists.shape[1]))
-            
-            #TODO: Add code here to filter out denominators of 0 to avoid NANs
 
             weights = minDists/denominator
             
             
             #Compute weighted predictions.
-            #IMPORTANT: the weighted variance predictions are negatively biased since we do not account for the covariance between models
+            #IMPORTANT: the weighted variance predictions are highly negatively biased since we do not account for the covariance between models
             weighted_mean_predictions = torch.sum(weights * mean_predictions,dim=1)
             weighted_var_predictions = torch.sum(weights**2 * var_predictions,dim=1)
         
@@ -351,17 +303,19 @@ class LocalGPModel:
             return weighted_mean_predictions,mean_predictions,weights,minDists
         else:
             return weighted_mean_predictions
+        
     '''
     Make a prediction at the point x by finding the M closest child models and
     computing a weighted average of their predictions. By default M is the number
     of child models. If M < number of child models, use all of them.
+    
+    THIS METHOD IS NOW DEPRECATED. DO NOT RELY ON THIS.
     '''
     def predictAtPoint(self,x,M=None,individualPredictions=False):
         if M is None:
             M = len(self.children)
         else:
             M = min(M,len(self.children))
-        
         
         #Compute distances between new input x and existing inputs
         distances,powers = self.getDistanceToCenters(x,True)
@@ -384,11 +338,8 @@ class LocalGPModel:
         
         '''
         TODO: It would be better to instead compute the weighted average of the
-        posterior distributions so we have access to variance as well. Presumably
-        the resulting distribution is also multivariate normal.
+        posterior distributions so we have access to variance as well.
         '''
-        
-        
         posteriorMeans = torch.stack(posteriorMeans)
         
         #We need to be careful with this computation. If the covariances are very small, we may end up with a nan value here.
@@ -401,13 +352,6 @@ class LocalGPModel:
             minDists = minDists
             weights = minDists/torch.sum(minDists)
         weightedAverageMean = torch.dot(weights,posteriorMeans.squeeze(-1).double()).float()
-        
-        '''
-        negLogDists = -torch.log(minDists)
-        weights = 1.0/(negLogDists/torch.sum(negLogDists))
-        weights = weights/torch.sum(weights)
-        weightedAverageMean = torch.dot(weights,posteriorMeans.squeeze(-1))
-        '''
         
         if individualPredictions:
             return weightedAverageMean,posteriorMeans,weights,minDists
@@ -500,7 +444,6 @@ class LocalGPChild(gpytorch.models.ExactGP):
     
     '''
     Perform a rank-one update of the child model's inverse covariance matrix cache.
-    This is necessary if the model is is NOT the most recently updated child model.
     '''
     def updateInvCovarCache(self,update=False):
         lazy_covar = self.prediction_strategy.lik_train_train_covar
@@ -584,125 +527,4 @@ class LocalGPChild(gpytorch.models.ExactGP):
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             prediction = self.likelihood(self(x))
         
-        return prediction
-        
-'''
-A child model which computes an approximate posterior distribution using inducing points.
-'''
-class ApproximateGPChild(gpytorch.models.VariationalGP):
-    def __init__(self, train_x, train_y, parent, inheritKernel=True):
-        #Set the number of inducing inputs to be no more than the number of points observed
-        numInducingPoints = min(parent.numInducingPoints,train_x.shape[0])
-        #Define the multivariate normal variational distribution for approximate posterior computation
-        variationalDist = gpytorch.variational.CholeskyVariationalDistribution(numInducingPoints)
-        variationalStrat = gpytorch.variational.VariationalStrategy(self,train_x,variationalDist,learn_inducing_locations=True)
-        
-        super(ApproximateGPChild, self).__init__(variationalStrat)
-        
-        self.parent = parent
-        self.mean_module = gpytorch.means.ConstantMean()
-        self.variationalDist = variationalDist
-        self.variationalStrat = variationalStrat
-        self.numInducingPoints = numInducingPoints
-        
-        self.likelihood = parent.likelihood()
-        '''
-        If inheritKernel is set to True, then the same Kernel function (including the same hyperparameters)
-        will be used in all of the child models. Otherwise, a separate instance of the same kernel function
-        is used for each child model.
-        '''
-        if inheritKernel:
-            self.covar_module = parent.covar_module
-        else:
-            self.covar_module = copy.deepcopy(parent.covar_module)
-        '''
-        Since the data is assumed to arrive as pairs {x,y}, we assume that the 
-        initial train_x,train_y are singleton, and set train_x as the intial
-        center for the model.
-        '''
-        self.center = train_x
-        self.train_x = train_x
-        self.train_y = train_y
-        
-        self.initTraining()
-        
-    def forward(self,x):
-        mean_x = self.mean_module(x)
-        covar_x = self.covar_module(x)
-        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
-    
-    '''
-    Update the child model to incorporate the training pair {x,y}
-    '''
-    def update(self,x,y):
-        #Concatenate existing data with new data
-        self.train_x = torch.cat([self.train_x,x],dim=0)
-        self.train_y = torch.cat([self.train_y,y],dim=0)
-        
-        #Compute the center of the model
-        self.center = torch.mean(self.train_x,dim=0)
-        
-        #Set the number of inducing inputs to be no more than the number of points observed
-        self.numInducingPoints = min(self.parent.numInducingPoints,self.train_x.shape[0])
-        
-        #Create new variational strategy for the updated model
-        self.variationalStrat = gpytorch.variational.VariationalStrategy(
-                model=self,
-                inducing_points=self.train_x,
-                variational_distribution=self.variationalDist,
-                learn_inducing_locations=True)
-        
-        #Retrain to fit new data
-        self.retrain()
-        return self
-    
-    '''
-    Setup optimizer and perform initial training
-    '''
-    def initTraining(self):
-        #Switch to training mode
-        self.train()
-        self.likelihood.train()
-        
-        #Setup optimizer
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.1)
-        objectiveFunction = self.parent.objectiveFunctionClass(self.likelihood,self,self.train_x.shape[0])
-        
-        #Perform training iterations
-        for i in range(self.parent.training_iter):
-            self.optimizer.zero_grad()
-            output = self(self.train_x)
-            loss = -objectiveFunction(output, self.train_y)
-            loss.backward()
-            self.optimizer.step()
-    
-    
-    
-    '''
-    Retrain model after new data is obtained
-    '''
-    def retrain(self):
-        #Switch to training mode
-        self.train()
-        self.likelihood.train()
-        
-        objectiveFunction = self.parent.objectiveFunctionClass(self.likelihood,self,self.train_x.shape[0])
-        
-        #Perform training iterations
-        for i in range(self.parent.training_iter):
-            self.optimizer.zero_grad()
-            output = self(self.train_x)
-            loss = -objectiveFunction(output, self.train_y)
-            loss.backward()
-            self.optimizer.step()
-    
-    '''
-    Evaluate the child model to get the predictive posterior distribution
-    '''
-    def predict(self,x):
-        #Switch to eval/prediction mode
-        self.eval()
-        self.likelihood.eval()
-        with torch.no_grad(), gpytorch.settings.fast_pred_var():
-            prediction = self.likelihood(self(x))
         return prediction

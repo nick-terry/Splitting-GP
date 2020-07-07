@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Fri Apr 17 17:32:42 2020
-
-@author: pnter
-"""
-
 import torch
 import pandas as pd
 import UtilityFunctions

@@ -26,8 +26,8 @@ g2center = torch.mean(group2,dim=0)
 
 
 
-fig = plt.figure(figsize=(5,10))
-ax = fig.subplots(2)
+fig = plt.figure(figsize=(10,5))
+ax = fig.subplots(1,2)
 
 plt.subplots_adjust(wspace=0, hspace=0)
 
@@ -58,13 +58,20 @@ ax[1].scatter(group2[:,0],group2[:,1],c='red',alpha=.5)
 ax[1].scatter(g1center[0],g1center[1],c='blue',edgecolor='black',marker='x',s=100)
 ax[1].scatter(g2center[0],g2center[1],c='red',edgecolor='black',marker='x',s=100)
 
+'''
 ax[0].set_xticks([],[])
 ax[0].set_yticks([],[])
 
 ax[1].set_xticks([],[])
+'''
 ax[1].set_yticks([],[])
 
-plt.savefig('pca.png',dpi=300)
+
+ax[0].set_xlabel('X1')
+ax[1].set_xlabel('X1')
+ax[0].set_ylabel('X2')
+
+plt.savefig('pca.pdf',dpi=300,bbox_inches='tight')
 
 '''
 ax[0].axis('off')
@@ -92,5 +99,9 @@ levels = np.linspace(-maxAbsVal,maxAbsVal,30)
 fig2,axes = plt.subplots(nrows=1,ncols=1,sharex=True,sharey=True,figsize=(6,5))
 contours = axes.contourf(xyGrid[:,:,0].detach(),xyGrid[:,:,1].detach(),z.detach().squeeze(2),levels)
 
+plt.xlabel('X1',fontsize='x-large')
+plt.ylabel('X2',fontsize='x-large')
+
+
 plt.colorbar(contours)
-fig2.savefig('synthetic_response.png',dpi=300)
+fig2.savefig('synthetic_response.pdf',dpi=300,bbox_inches='tight')

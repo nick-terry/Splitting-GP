@@ -13,7 +13,7 @@ import numpy as np
 from itertools import product
 from math import inf
 
-gpytorch.settings.fast_computations.covar_root_decomposition = True
+gpytorch.settings.fast_computations.covar_root_decomposition(True)
 
 #Construct a grid of input points
 gridDims = 50

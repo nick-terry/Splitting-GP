@@ -2,7 +2,7 @@ import pdb
 
 import numpy as np
 from scipy import linalg, optimize
-
+from math import inf
 
 import cov
 
@@ -58,18 +58,23 @@ class GP(object):
             # Cholesky factor of k(X,X)
             #If this fails, add some diagonal jitter and re-attempt
             attempts = 0
-            maxAttempts = 10
+            maxAttempts = 5
             while attempts < maxAttempts:
                 try:
                     L[:] = linalg.cholesky(K,lower=True)
                     attempts = maxAttempts
                 
                 except np.linalg.LinAlgError as e:
-                    print('Attempted Cholesky of Singular matrix...attempt {0}'.format(attempts))
+                    print('Attempted Cholesky of non-PD matrix...attempt {0}'.format(attempts))
                     K += np.eye(self.size)*10**-5
                     attempts += 1
                     
                     if attempts==maxAttempts:
+                        print(cov_params)
+                        print(K.shape)
+                        print(np.any(K<0))
+                        print('Eigenvalues:')
+                        print(np.linalg.eigvals(K))
                         raise e
                     
             # k(X,X)^-1*y
@@ -114,7 +119,15 @@ class GP(object):
         f = lambda x: self.NLML(x)
         fp = lambda x: self.NLML(x,derivs=True)
         
-        self.params = optimize.minimize(f,self.params,method='L-BFGS-B',jac=fp).x
+        #Create lower upper bound on lengthscale to prevent overflow issues
+        #Lower bound on 1/l is 10^-5, so we constraint the log(l) < 10*log(10)
+        boundPow = 10
+        hyperparamBounds = [(-inf,boundPow*np.log(10))]*self.params[:-1].shape[0]
+        hyperparamBounds.append((-inf,inf))
+        
+        self.params = optimize.minimize(f,self.params,
+                                        bounds=hyperparamBounds,
+                                        method='L-BFGS-B',jac=fp).x
         #self.params = optimize.fmin_l_bfgs_b(f,self.params,fp,disp=True)[0]
         #self.params = optimize.fmin_bfgs(f,self.params,fp,disp=1)[0]
 

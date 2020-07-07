@@ -226,11 +226,8 @@ paramsList = [{'M':1,'splittingLimit':70,'inheritLikelihood':False,'mtype':'spli
 '''
 
 #powergen
-paramsList = [{'M':None,'splittingLimit':625,'inheritLikelihood':False,'mtype':'splitting'},
-              {'M':None,'splittingLimit':300,'inheritLikelihood':False,'mtype':'splitting'},
-              {'M':None,'splittingLimit':150,'inheritLikelihood':False,'mtype':'splitting'},
-              {'M':None,'splittingLimit':75,'inheritLikelihood':False,'mtype':'splitting'},
-              {'M':None,'splittingLimit':30,'inheritLikelihood':False,'mtype':'splitting'}]
+paramsList = [{'M':1,'splittingLimit':100,'inheritLikelihood':False,'mtype':'splitting'},
+              {'M':None,'splittingLimit':100,'inheritLikelihood':False,'mtype':'splitting'}]
 '''
 paramsList = [{'M':None,'splittingLimit':5000,'inheritLikelihood':False,'mtype':'splitting'},
               {'M':None,'splittingLimit':2500,'inheritLikelihood':False,'mtype':'splitting'},
@@ -303,7 +300,7 @@ df.to_csv('powergen_results_gp.csv')
 #paramsList = [{'M':None,'splittingLimit':75,'inheritLikelihood':True,'mtype':'splitting'}]
 
 #Number of replications to perform. Only necessary to do >1 if randomized
-numReps = 10
+numReps = 1
 
 #Create seeds
 #torch.manual_seed(41064)
@@ -328,21 +325,18 @@ with gpytorch.settings.max_cg_iterations(20000):
     for i in range(len(paramsList)):
         for rep in range(numReps):
             seed = seeds[rep]
-            predictorsTrain,responseTrain,predictorsTest,responseTest = getPowergen(seed)
+            predictorsTrain,responseTrain,predictorsTest,responseTest,pred,resp = getSine()
             
             t0 = time.time()
             model,deltaT = evalModel(**paramsList[i])
             if paramsList[i]['mtype']=='rbcm':    
                 preds,variances = model.predict(predictorsTest)
             else:
-                preds = model.predict(predictorsTest)
-            t1 = time.time()
-            rmse = torch.sqrt(torch.mean((preds-responseTest)**2))
-            print(rmse)
-            mad = torch.mean(torch.abs(preds-responseTest))
-            resultsArr[i+rep*len(paramsList)] = rmse
-            timeArr[i+rep*len(paramsList)] = t1-t0
-            madArr[i+rep*len(paramsList)] = mad
+                if paramsList[i]['M']==1:
+                    preds1 = model.predict(pred)
+                    children = model.children
+                else:
+                    preds = model.predict(pred)
 
 #create dataframe for storing experiment results
 
@@ -358,8 +352,48 @@ df['rmse'] = resultsArr.detach().numpy()
 df['mad'] = madArr.detach().numpy()
 df['replication'] = repArr.detach().numpy()
 
-df.to_csv('powergen_results_splitting_10reps.csv')
+#df.to_csv('powergen_results_splitting_10reps.csv')
 
+fig,axes = plt.subplots(1,2)
+plt.subplots_adjust(wspace=0, hspace=0)
+#Show scatter of obs
+indices = range(0,resp.shape[0])
+axes[0].scatter(pred[indices],resp[indices],color='blue',alpha=.5)
+
+for child in children:
+    axes[0].axvline(child.center,color='red')
+
+#Show discontinuous prediction
+axes[0].plot(pred[indices],preds1[indices].detach(),color='black',lw=5)
+axes[0].plot(pred[indices],preds1[indices].detach(),color='orange',lw=4)
+
+axes[1].scatter(pred[indices],resp[indices],color='blue',alpha=.5)
+
+for child in children:
+    axes[1].axvline(child.center,color='red')
+
+#Show continuous prediction
+axes[1].plot(pred[indices],preds[indices].detach(),color='black',lw=5)
+axes[1].plot(pred[indices],preds[indices].detach(),color='orange',lw=4)
+
+axes[0].set_xlim(2,17)
+axes[0].set_ylim(-10,1)
+
+axes[1].set_xlim(2,17)
+axes[1].set_ylim(-10,1)
+
+axes[0].set_xlabel('X')
+axes[0].set_ylabel('Y')
+axes[1].set_xlabel('X')
+'''
+axes[0].set_xticks([],[])
+axes[0].set_yticks([],[])
+
+axes[1].set_xticks([],[])
+'''
+axes[1].set_yticks([],[])
+
+plt.savefig('discontinuity2.pdf',dpi=300,bbox_inches='tight')
 
 '''
 #Define a common scale for color mapping for contour plots

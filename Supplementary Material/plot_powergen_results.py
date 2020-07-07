@@ -1,11 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Apr 27 20:13:19 2020
-
-@author: pnter
-"""
-
-
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
@@ -21,58 +13,9 @@ for i in range(len(tableau20)):
     r, g, b = tableau20[i]  
     tableau20[i] = (r / 255., g / 255., b / 255.)
 
-
-#kin40_plot()
-kin40_splitting = pd.read_csv('kin40_results_splitting_compare_to_rbcm_m1.csv')
-kin40_local = pd.read_csv('kin40_results_local_compare.csv')
-kin40_rbcm = pd.read_csv('RBCM.csv')
-
-fig = plt.figure()
-ax = fig.add_subplot(111)
-
-splittingParams = kin40_splitting['params']
-splittingPPE = [int(splittingParam.split('\'')[4][2:][:-2]) for splittingParam in splittingParams]
-splittingRMSE = kin40_splitting['rmse']
-
-ax.plot(splittingPPE,splittingRMSE,'-o',color=tableau20[0])
-
-rbcmPPE = kin40_rbcm['npoints per expert']
-rbcmRMSE = kin40_rbcm['rmse']
-
-ax.plot(rbcmPPE,rbcmRMSE,'-o',color=tableau20[2])
-
-ax.axhline(rbcmRMSE[4],ls='--',color=tableau20[8])
-
-localWGEN = kin40_local['params']
-localWGEN = [float(params.split(',')[1][-6:].strip()) for params in localWGEN]
-localRMSE = kin40_local['rmse']
-
-ax2 = ax.twiny()
-ax2.set_xscale('log')
-lins2 = ax2.plot(localWGEN[:-1],localRMSE[:-1],'-o',color=tableau20[4])
-ax2.set_xlim(ax2.set_xlim()[::-1])
-
-# add lines to make legend
-lns = ax.lines[:-1]+lins2+[ax.lines[-1]]
-labs = [l.get_label() for l in lns]
-ax2.legend(lns, ['splitting','rbcm','local','full GP'], loc=0)
-
-#label axes
-ax.set_ylabel('RMSE',fontsize='x-large')
-ax.set_xlabel('Observations per expert/local model',fontsize='x-large')
-ax2.set_xlabel('w_gen',fontsize='x-large')
-
-plt.savefig('plot_kin40_comparison_nonan.pdf',dpi=300)
-
 #powergen plot
-powergen_rbcm = pd.read_csv('C:/Users/pnter/Documents/GitHub/GP-Regression-Research/rBCM_powergen_results_ppe_newformat.csv')
-powergen_splitting = pd.read_csv('C:/Users/pnter/Documents/GitHub/GP-Regression-Research/powergen_results_splitting_10reps.csv')
-
-#log transform
-'''
-powergen_rbcm['time'] = np.log(powergen_rbcm['time']) 
-powergen_splitting = np.log(powergen_splitting['time']) 
-'''
+powergen_rbcm = pd.read_csv('powergen_results_rBCM_10reps.csv')
+powergen_splitting = pd.read_csv('powergen_results_splitting_10reps.csv')
 
 paramsStrings = powergen_splitting['params']
 splittingLimits = []
@@ -105,7 +48,7 @@ powerGenTime_CIHW = .96*np.sqrt(10)*powergen_rbcm['std_time']
 powerFig = plt.figure()
 powerAxes = powerFig.subplots(2)
 
-#number of observations used for training
+#number of observations used for training. this is hard coded for the powergen dataset,unfortunately
 numObs= 7622
 
 powerAxes[0].plot(splittingMeans['params'],splittingMeans['rmse'],'-o',color=tableau20[0])

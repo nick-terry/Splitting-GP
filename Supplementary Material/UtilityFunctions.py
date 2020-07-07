@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Mar  2 15:58:59 2020
-
-@author: pnter
-"""
-
 import torch
 import numpy as np
 

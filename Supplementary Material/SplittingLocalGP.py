@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Wed Feb 26 12:52:23 2020
-
-@author: pnter
-"""
 from LocalGP import LocalGPModel,LocalGPChild
 from UtilityFunctions import pddp
 import torch

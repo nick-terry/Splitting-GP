@@ -110,9 +110,10 @@ ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.5)
 '''
 
 ax.legend(['splitting','rbcm','local','full GP'])
-ax.set_ylabel('MSE')
-ax.set_xlabel('Number of Observations')
-plt.savefig('synthetic_mse.png',dpi=300)
+ax.set_ylabel('MSE',fontsize='x-large')
+ax.set_xlabel('Number of Observations',fontsize='x-large')
+ax.tick_params(labelsize='x-large')
+plt.savefig('synthetic_mse.pdf',dpi=300,bbox_inches='tight')
 
 metric = 'avg_memory_usage'
 fig = plt.figure()
@@ -135,9 +136,10 @@ ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.5)
 '''
 
 ax.legend(['splitting','rbcm','local','full GP'])
-ax.set_ylabel('Memory Usage (kB)')
-ax.set_xlabel('Number of Observations')
-plt.savefig('synthetic_mem.png',dpi=300)
+ax.set_ylabel('Memory Usage (kB)',fontsize='x-large')
+ax.set_xlabel('Number of Observations',fontsize='x-large')
+ax.tick_params(labelsize='x-large')
+plt.savefig('synthetic_mem.pdf',dpi=300,bbox_inches='tight')
 
 metric = 'avg_training_time'
 fig = plt.figure()
@@ -160,6 +162,7 @@ ax.fill_between(observations_vals,mean-cihw,mean+cihw,alpha=.5)
 '''
 
 ax.legend(['splitting','rbcm','local','full GP'])
-ax.set_ylabel('Training Time (sec)')
-ax.set_xlabel('Number of Observations')
-plt.savefig('synthetic_traintime.png',dpi=300)
+ax.set_ylabel('Training Time (sec)',fontsize='x-large')
+ax.set_xlabel('Number of Observations',fontsize='x-large')
+ax.tick_params(labelsize='x-large')
+plt.savefig('synthetic_traintime.pdf',dpi=300,bbox_inches='tight')

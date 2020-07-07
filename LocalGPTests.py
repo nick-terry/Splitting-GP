@@ -64,11 +64,11 @@ def evalModel(w_gen,numSamples,maxChildren0):
     model.predict(xyGrid[randIndices[0,:],randIndices[1,:]])
     return t1-t0
 
-maxChildrenVals = [inf,inf]
-numSamplesVals = [100,200]
+maxChildrenVals = [inf]
+numSamplesVals = [1000]
 runtimes = {}
 for maxChildren,numSamples in product(maxChildrenVals,numSamplesVals):
-    runtimes[(maxChildren,numSamples)] = evalModel(.2,numSamples,maxChildren)
+    runtimes[(maxChildren,numSamples)] = evalModel(.1,numSamples,maxChildren)
 
 '''
 #Predict over the whole grid for plotting

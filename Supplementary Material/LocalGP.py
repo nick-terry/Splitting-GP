@@ -1,28 +1,10 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Fri Feb  7 10:57:53 2020
-
-@author: pnter
-"""
-
 import torch
-
-'''
 import gpytorch
-
-from gpytorch.utils.broadcasting import _mul_broadcast_shape
 from gpytorch.utils.memoize import add_to_cache, is_in_cache
 from gpytorch.lazy.root_lazy_tensor import RootLazyTensor
-'''
-
-#Import the GP implementation
-import GP
-
-import numpy as np
-import itertools
 import copy
-from math import inf,ceil,log
-
+from UtilityFunctions import updateInverseCovarWoodbury
+from math import inf
 
 '''
 Implements the Local Gaussian Process Regression Model as described by Nguyen-tuong et al.
@@ -34,8 +16,6 @@ Parameters:
     kernel: The kernel function used to construct the covariances matrices
     w_gen: The threshold distance for generation of a new child model
 
-More docstring here
-
 '''
 class LocalGPModel:
     def __init__(self, likelihoodFn, kernel, inheritKernel=True, **kwargs):        
@@ -43,17 +23,26 @@ class LocalGPModel:
         self.children = []
         self.w_gen = kwargs['w_gen'] if 'w_gen' in kwargs else .5
         self.covar_module = kernel
-        
+        self.mean_module = kwargs['mean'] if 'mean' in kwargs else gpytorch.means.ConstantMean
         self.likelihood = likelihoodFn
         self.inheritKernel = inheritKernel
         
         #Number of training iterations used each time child model is updated
         #This should be roughly proportional to the number of observations.
         #By default, we will use 30. As number of data goes up, this may increase
-        self.training_iter = 500
+        self.training_iter = 30
         
         #Default output dimension is 1 (scalar)
         self.outputDim = 1 if 'outputDim' not in kwargs else kwargs['outputDim']
+        
+        #If numInducingInputs is given, use variational GP models for child models
+        if 'numInducingPoints' in kwargs:
+            self.numInducingPoints = kwargs['numInducingPoints']
+            assert(type(self.numInducingPoints)==int)
+            assert(self.numInducingPoints>0)
+            self.objectiveFunctionClass = gpytorch.mlls.VariationalELBO
+        else:
+            self.numInducingPoints = None
         
         #If maxChildren in kwargs, set self.maxChildren. Else, set to inf
         if 'maxChildren' in kwargs:
@@ -66,38 +55,10 @@ class LocalGPModel:
             self.M = kwargs['M']
         else:
             self.M = None
-    '''
-    Update the LocalGPModel with a pair {x,y}. x may be n-dimensional, y is scalar
-    '''
-    def update(self,x,y):
-        #If no child model have been created yet, instantiate a new child with {x,y} and record the output dimension
-        if len(self.children)==0:
-            self.createChild(x,y)
-            self.outputDim = int(y.shape[-1])
             
-        #If child models exist, find the the child whose center is closest to x
-        else:
-            closestChildIndex,minDist = self.getClosestChild(x)
-            
-            #Check if the closest child is farther away than child model generation threshold,
-            #or if the max number of children has already been generated
-            if float(minDist) > self.w_gen or len(self.children) >= self.maxChildren:
-                
-                closestChildModel = self.children[closestChildIndex]
-                #Create a new model which additionally incorporates the pair {x,y}
-                newChildModel = closestChildModel.update(x,y)            
-                
-                #Set other child to be last updated
-                self.setChildLastUpdated(newChildModel)
-                
-                #Replace the existing model with the new model which incorporates new data
-                self.children[closestChildIndex] = newChildModel
-                del closestChildModel
-                
-            else:
-                #Since the distance from x to the nearest child model is greater than w_gen, create a new child model centered at x
-                self.createChild(x,y)
-    
+    '''
+    Update the LocalGPModel with a pair {x,y}.
+    '''   
     def update(self, x, y):
         #If no child model have been created yet, instantiate a new child with {x,y} and record the output dimension
         if len(self.children)==0:
@@ -129,9 +90,6 @@ class LocalGPModel:
                 
                 return
                 
-                
-            
-            
             #Get points where we are not generating a new model
             x_assign = x[genNewModelIndices.bitwise_not()]
             y_assign = y[genNewModelIndices.bitwise_not()]
@@ -248,64 +206,42 @@ class LocalGPModel:
         else:
             M = min(M,len(self.children))
         
-        #TODO: Maybe change this behavior
         #Update all of the covar modules to the most recent
-        if False and self.inheritKernel:  
+        if self.inheritKernel:  
             for child in self.children:
                 child.covar_module = self.covar_module
-                
-        #If not inheriting kernel, then subsample some observations from each child and learn the params from those
+        #If not inheriting kernel, then average the lengthscale params of child kernels
         else:
-            self.X = []
-            self.y = []
-            
-            for child in self.children:
-                X = child.train_x
-                y = child.train_y
-                
-                fractionSubsample = .1
-                sampleIndices = torch.multinomial(torch.ones((y.shape[0])).float(),ceil(y.shape[0]*.1),replacement=False)
-                
-                self.X.append(X[sampleIndices,:])
-                self.y.append(y[sampleIndices])
-                
-            self.X = torch.stack(self.X)
-            self.y = torch.stack(self.y)
-                
-            
+            lengthscales = [child.covar_module.lengthscale for child in self.children]
+            self.covar_module.lengthscale = torch.mean(torch.stack(lengthscales),dim=0)
             
         mean_predictions = []
-        
-        if getVar:
-            var_predictions = []
+        var_predictions = []
         
         #Get the predictions of each child at each point
         for child in self.children:
-            prediction = child.predict(x.detach().numpy(),getVar)
+            prediction = child.predict(x)
             
-            mean_predictions.append(torch.tensor(prediction[0]))
-            if getVar:
-                var_predictions.append(torch.tensor(prediction[1]))
+            mean_predictions.append(prediction.mean)
+            var_predictions.append(prediction.variance)
         
         #Concatenate into pytorch tensors
         mean_predictions = torch.stack(mean_predictions).transpose(0,1)
-        if getVar:
-            var_predictions = torch.stack(var_predictions).transpose(0,1)
+        var_predictions = torch.stack(var_predictions).transpose(0,1)
         
         #Squeeze out any extra dims that may have accumulated
         if mean_predictions.dim()>2:
             mean_predictions = mean_predictions.squeeze()
-            if getVar:
-                var_predictions = var_predictions.squeeze()
+            var_predictions = var_predictions.squeeze()
         
         #if the predictions are done at a single point, we need to unsqueeze in dim 0
         if mean_predictions.dim()<2:
             mean_predictions = mean_predictions.unsqueeze(-1)
-            if getVar:
-                var_predictions = var_predictions.unsqueeze(-1)
+            var_predictions = var_predictions.unsqueeze(-1)
         
         #Transpose to agree with minIndices dims
-        #Note: Don't tranpose for some other experiments...
+        #Note: This only needs to be done for the incremental experiments where we track memory usage.
+        #Leave this commented out otherwise
         '''
         mean_predictions = mean_predictions.transpose(0,1)
         var_predictions = var_predictions.transpose(0,1)
@@ -330,8 +266,7 @@ class LocalGPModel:
             gatherDim = 1 if mean_predictions.dim()>1 else 0
             
             mean_predictions = mean_predictions.gather(gatherDim,minIndices)
-            if getVar:
-                var_predictions = var_predictions.gather(gatherDim,minIndices)
+            var_predictions = var_predictions.gather(gatherDim,minIndices)
             
             #Compute weights for the predictions. Switch to double precision for this somewhat unstable computation
             minDists = minDists.double()
@@ -347,15 +282,13 @@ class LocalGPModel:
             
             
             #Compute weighted predictions.
-            #IMPORTANT: the weighted variance predictions are negatively biased since we do not account for the covariance between models
+            #IMPORTANT: the weighted variance predictions are highly negatively biased since we do not account for the covariance between models
             weighted_mean_predictions = torch.sum(weights * mean_predictions,dim=1)
-            if getVar:
-                weighted_var_predictions = torch.sum(weights**2 * var_predictions,dim=1)
+            weighted_var_predictions = torch.sum(weights**2 * var_predictions,dim=1)
         
         else:
             weighted_mean_predictions = mean_predictions
-            if getVar:    
-                weighted_var_predictions = var_predictions
+            weighted_var_predictions = var_predictions
 
         if getVar:
             return weighted_mean_predictions,weighted_var_predictions
@@ -363,17 +296,19 @@ class LocalGPModel:
             return weighted_mean_predictions,mean_predictions,weights,minDists
         else:
             return weighted_mean_predictions
+        
     '''
     Make a prediction at the point x by finding the M closest child models and
     computing a weighted average of their predictions. By default M is the number
     of child models. If M < number of child models, use all of them.
+    
+    THIS METHOD IS NOW DEPRECATED. DO NOT RELY ON THIS.
     '''
     def predictAtPoint(self,x,M=None,individualPredictions=False):
         if M is None:
             M = len(self.children)
         else:
             M = min(M,len(self.children))
-        
         
         #Compute distances between new input x and existing inputs
         distances,powers = self.getDistanceToCenters(x,True)
@@ -396,11 +331,8 @@ class LocalGPModel:
         
         '''
         TODO: It would be better to instead compute the weighted average of the
-        posterior distributions so we have access to variance as well. Presumably
-        the resulting distribution is also multivariate normal.
+        posterior distributions so we have access to variance as well.
         '''
-        
-        
         posteriorMeans = torch.stack(posteriorMeans)
         
         #We need to be careful with this computation. If the covariances are very small, we may end up with a nan value here.
@@ -414,37 +346,51 @@ class LocalGPModel:
             weights = minDists/torch.sum(minDists)
         weightedAverageMean = torch.dot(weights,posteriorMeans.squeeze(-1).double()).float()
         
-        '''
-        negLogDists = -torch.log(minDists)
-        weights = 1.0/(negLogDists/torch.sum(negLogDists))
-        weights = weights/torch.sum(weights)
-        weightedAverageMean = torch.dot(weights,posteriorMeans.squeeze(-1))
-        '''
-        
         if individualPredictions:
             return weightedAverageMean,posteriorMeans,weights,minDists
 
         else:
             return weightedAverageMean
         
-class LocalGPChild(GP):
+class LocalGPChild(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, parent, inheritKernel=True, **kwargs):
         
         #Track if the child was created by splitting
         self.isSplittingChild = True if 'split' in kwargs and kwargs['split'] else False
+        
+        #Handle prior likelihood
+        if 'priorLik' in kwargs and kwargs['priorLik'] is not None:
+            priorLik =  kwargs['priorLik']
+        else:
+            #If no prior is provided, use the default of the parent
+            priorLik = parent.likelihood()
             
-        super(GP, self).__init__(train_x, train_y, self.parent.covType)
+            #In this case, we reset the isSplittingChild flag to false in order for the new likelihood to be trained
+            self.isSplittingChild = False
+            
+        super(LocalGPChild, self).__init__(train_x, train_y, priorLik)
+        
+        #Set to double mode
+        self.double()
+        self.likelihood.double()
         
         self.parent = parent
         
-        self.kwargs = kwargs
+        if 'priorMean' in kwargs and kwargs['priorMean'] is not None:
+            #If given, take a prior for the mean. Used for splitting models.
+            self.mean_module = copy.deepcopy(kwargs['priorMean'])
+        else:
+            self.mean_module = parent.mean_module()
         
         '''
         If inheritKernel is set to True, then the same Kernel function (including the same hyperparameters)
         will be used in all of the child models. Otherwise, a separate instance of the same kernel function
         is used for each child model.
         '''
-
+        if inheritKernel:
+            self.covar_module = parent.covar_module
+        else:
+            self.covar_module = parent.covar_module.__class__(ard_num_dims=train_x.shape[1] if train_x.dim()>1 else 1)
         self.lastUpdated = True
         
         '''
@@ -457,25 +403,121 @@ class LocalGPChild(GP):
         self.train_x = train_x
         self.train_y = train_y
         
-
         self.trained = False
-
+        
+        self.initTraining()
+        
+    def forward(self,x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
     
     def update(self,x,y):
+        #Sync covar
+        if self.parent.inheritKernel:
+            self.covar_module = self.parent.covar_module
+        
         #Update train_x, train_y
         self.train_x = torch.cat([self.train_x, x])
         self.train_y = torch.cat([self.train_y, y])
         
-        newChildModel = LocalGPChild(self.train_x.detach().numpy(),
-                                     self.train_y.detach().numpy(),
-                                     self.parent, self.kwargs)
+        #Update the data which can be used for optimizing
+        self.train_inputs = (self.train_x,)
+        self.train_targets = self.train_y
         
-        return newChildModel
+        #Flag the child as not having been trained.
+        self.trained = False
+        
+        #Update center
+        self.center = torch.mean(self.train_x,dim=0)
+        if self.center.dim()==0:
+            self.center = self.center.unsqueeze(0)
+        
+        return self
     
     '''
-    Train model after new data is obtained
+    Perform a rank-one update of the child model's inverse covariance matrix cache.
     '''
-    def train(self):
-        super(self).train()       
+    def updateInvCovarCache(self,update=False):
+        lazy_covar = self.prediction_strategy.lik_train_train_covar
+        if is_in_cache(lazy_covar,"root_inv_decomposition"):
+            if update:
+                #Get the old cached inverse covar matrix 
+                K_0inv = lazy_covar.root_inv_decomposition()
+                #Get the new covar matrix by calling the covar module on the training data
+                K = self.covar_module(self.train_x)
+                #Compute the update
+                Kinv = updateInverseCovarWoodbury(K_0inv, K)
+                #Store updated inverse covar matrix in cache
+                add_to_cache(lazy_covar, "root_inv_decomposition", RootLazyTensor(torch.sqrt(Kinv)))
+            else:
+                #This is a bit dirty, but here we will simply delete the root/root_inv from cache. This forces
+                #GPyTorch to recompute them.
+                
+                lazy_covar._memoize_cache = {}
+                self.prediction_strategy._memoize_cache = {}
+                
+    '''
+    Setup optimizer and perform initial training
+    '''
+    def initTraining(self):
+        #Switch to training mode
+        self.train()
+        self.likelihood.train()
+        
+        #We only train on instantiation if the child model is not a result of a split
+        if not self.isSplittingChild:
+            #Setup optimizer
+            self.optimizer = torch.optim.Adam(self.parameters(), lr=0.1)
+            mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self)
+            mll.double()
+            
+            #Perform training iterations
+            training_iter = self.parent.training_iter
+            for i in range(training_iter):
+                self.optimizer.zero_grad()
+                output = self(self.train_x)
+                loss = -mll(output, self.train_y)
+                loss.backward()
+                    
+                self.optimizer.step()
+            
         self.trained = True
     
+    '''
+    Retrain model after new data is obtained
+    '''
+    def retrain(self):
+        #Switch to training mode
+        self.train()
+        self.likelihood.train()
+        
+        mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self)
+        
+        #Perform training iterations
+        training_iter = self.parent.training_iter
+        for i in range(training_iter):
+            self.optimizer.zero_grad()
+            output = self(self.train_x)
+            loss = -mll(output, self.train_y)
+            loss.backward()
+
+            self.optimizer.step()
+        
+        self.trained = True
+    
+    '''
+    Evaluate the child model to get the predictive posterior distribution
+    '''
+    def predict(self,x):
+        
+        if not self.trained:
+            self.retrain()
+        
+        #Switch to eval/prediction mode
+        self.eval()
+        self.likelihood.eval()
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():
+            prediction = self.likelihood(self(x))
+        
+        return prediction
