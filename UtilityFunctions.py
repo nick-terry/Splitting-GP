@@ -46,6 +46,35 @@ def pddp(M,direction=False):
         return labels,V[:,0]
     return labels
 
+
+def activeSubspacePartition(X,y,theta):
+    """
+    Split data by principal active subspace partitioning
+
+    Parameters
+    ----------
+    X : torch tensor
+        the inputs.
+    y : torch tensor
+        the response
+    theta : torch tensor
+        the lengthscale parameters of the kernel function
+
+    Returns
+    -------
+    TYPE
+        DESCRIPTION.
+
+    """
+    
+    # 
+    
+    
+    #Assign a cluster label based on product of the rows of the matrix with the principal direction
+    labels = torch.where(M1>0,torch.ones(M1.shape[0]),torch.zeros(M1.shape[0]))
+    
+    return labels
+
 '''
 Compute one iteration of the Principal Direction Divisive Partitioning algorithm using power iteration to get principal direction
 

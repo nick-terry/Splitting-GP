@@ -87,7 +87,7 @@ timeArr = torch.zeros((len(paramsList)*numReps,1))
 repArr = torch.arange(numReps).repeat_interleave(len(paramsList))
 
 #Up this setting to prevent potential numerical issues if CG hasn't converged in <2000 iterations
-with gpytorch.settings.max_cg_iterations(20000):
+with gpytorch.settings.max_cg_iterations(2000):
     for i in range(len(paramsList)):
         for rep in range(numReps):
             
